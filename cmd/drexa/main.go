@@ -10,12 +10,14 @@ import (
 )
 
 func main() {
-	db, err := database.Connect()
+	cfg := config.Load()
+
+	db, err := database.Connect(cfg.DB.DSN)
 	if err != nil {
 		log.Println(err)
 	}
 
-	srv := NewServer(config.Load(), db)
+	srv := NewServer(cfg, db)
 
 	ctx := context.Background()
 	if err := srv.Start(ctx, os.Stdout, os.Args); err != nil {
