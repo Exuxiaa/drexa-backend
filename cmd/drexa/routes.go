@@ -13,15 +13,16 @@ func addRoutes(
 	adminKycUc auth.AdminKycUsecase,
 	tokenSvc auth.TokenService,
 	fbVerifier auth.FirebaseVerifier,
+	secureCookies bool,
 ) {
 	mux.Handle("/", http.NotFoundHandler())
 
 	jwt := auth.JWTMiddleware(tokenSvc)
 
 	// ── Public auth ──────────────────────────────────────────────────────────
-	mux.Handle("POST /api/v1/auth/signin", auth.HandleFirebaseSignIn(authUc, fbVerifier))
+	mux.Handle("POST /api/v1/auth/signin", auth.HandleFirebaseSignIn(authUc, fbVerifier, secureCookies))
 	mux.Handle("POST /api/v1/auth/logout", auth.HandleLogout(authUc))
-	mux.Handle("POST /api/v1/auth/refresh", auth.HandleRefreshToken(authUc))
+	mux.Handle("POST /api/v1/auth/refresh", auth.HandleRefreshToken(authUc, secureCookies))
 
 	// ── Protected auth (JWT required) ────────────────────────────────────────
 	mux.Handle("POST /api/v1/auth/logout/all", jwt(auth.HandleLogoutAll(authUc)))

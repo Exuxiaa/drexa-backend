@@ -50,6 +50,7 @@ func (uc *authUsecase) SignInWithFirebase(ctx context.Context, claims *auth.Fire
 			FirebaseUID:     claims.UID,
 			Email:           claims.Email,
 			IsEmailVerified: claims.EmailVerified,
+			LastLoginAt:     time.Now(),
 		}
 		if err := uc.userRepo.Create(ctx, user); err != nil {
 			return nil, errors.New("failed to create user")

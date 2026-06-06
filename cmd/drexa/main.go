@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"drexa/internal/auth"
 	"drexa/internal/config"
 	"drexa/internal/infrastructure/cache"
 	"drexa/internal/infrastructure/database"
@@ -18,6 +19,9 @@ func main() {
 	db, err := database.Connect(cfg.DB)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if err := db.AutoMigrate(&auth.User{}, &auth.KycProfile{}, &auth.RefreshToken{}, &auth.PasswordResetToken{}); err != nil {
+		log.Fatalf("database migration failed: %v", err)
 	}
 
 	rdb, err := cache.NewRedis(cfg.Redis)

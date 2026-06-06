@@ -34,13 +34,13 @@ func sendJSON(w http.ResponseWriter, status int, payload any) {
 	json.NewEncoder(w).Encode(payload)
 }
 
-func setAuthCookies(w http.ResponseWriter, access, refresh string) {
+func setAuthCookies(w http.ResponseWriter, access, refresh string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    access,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   900,
 	})
@@ -49,7 +49,7 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 		Value:    refresh,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   604800,
 	})
@@ -60,7 +60,7 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 // HandleFirebaseSignIn is the single sign-in endpoint.
 // It accepts a Firebase ID token, verifies it, and issues backend JWT cookies.
 // On first call for a given UID the user record is created automatically.
-func HandleFirebaseSignIn(u AuthUsecase, fb FirebaseVerifier) http.HandlerFunc {
+func HandleFirebaseSignIn(u AuthUsecase, fb FirebaseVerifier, secureCookies bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req FirebaseSignInRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -80,7 +80,7 @@ func HandleFirebaseSignIn(u AuthUsecase, fb FirebaseVerifier) http.HandlerFunc {
 			return
 		}
 
-		setAuthCookies(w, token.AccessToken, token.RefreshToken)
+		setAuthCookies(w, token.AccessToken, token.RefreshToken, secureCookies)
 		sendJSON(w, http.StatusOK, MessageResponse{Message: "sign-in successful"})
 	}
 }
@@ -96,7 +96,7 @@ func HandleLogout(u AuthUsecase) http.HandlerFunc {
 	}
 }
 
-func HandleRefreshToken(u AuthUsecase) http.HandlerFunc {
+func HandleRefreshToken(u AuthUsecase, secureCookies bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("refresh_token")
 		if err != nil {
@@ -110,7 +110,7 @@ func HandleRefreshToken(u AuthUsecase) http.HandlerFunc {
 			return
 		}
 
-		setAuthCookies(w, token.AccessToken, token.RefreshToken)
+		setAuthCookies(w, token.AccessToken, token.RefreshToken, secureCookies)
 		sendJSON(w, http.StatusOK, MessageResponse{Message: "token refreshed"})
 	}
 }

@@ -61,7 +61,7 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 	kycUsecase := authUc.NewKycUsecase(userRepo, kycRepo)
 	adminKycUsecase := authUc.NewAdminKycUsecase(kycRepo, notifService, userRepo)
 
-	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, fbVerifier)
+	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, fbVerifier, cfg.App.Env == "production")
 
 	return &Server{
 		httpServer: &http.Server{
