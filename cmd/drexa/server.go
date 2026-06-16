@@ -19,6 +19,7 @@ import (
 	authUc "drexa/internal/auth/usecase"
 	"drexa/internal/config"
 	firebaseInfra "drexa/internal/infrastructure/firebase"
+	"drexa/internal/market"
 	walletRepo "drexa/internal/wallet/repository"
 	walletSvc "drexa/internal/wallet/service"
 	walletUc "drexa/internal/wallet/usecase"
@@ -89,7 +90,14 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 		paymentService,
 	)
 
-	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, fbVerifier, walletUsecase, adminWalletUsecase, cfg.App.Env == "production")
+	// ── Market Service ───────────────────────────────────────────────────────
+	marketHub := market.NewHub()
+	go marketHub.Run()
+
+	binanceClient := market.NewBinanceWSClient(marketHub)
+	go binanceClient.Run()
+
+	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, fbVerifier, walletUsecase, adminWalletUsecase, marketHub, cfg.App.Env == "production")
 
 	return &Server{
 		httpServer: &http.Server{

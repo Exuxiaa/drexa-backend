@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"drexa/internal/auth"
+	"drexa/internal/market"
 	"drexa/internal/wallet"
 )
 
@@ -16,6 +17,7 @@ func addRoutes(
 	fbVerifier auth.FirebaseVerifier,
 	walletUc wallet.WalletUsecase,
 	adminWalletUc wallet.AdminWalletUsecase,
+	marketHub *market.Hub,
 	secureCookies bool,
 ) {
 	mux.Handle("/", http.NotFoundHandler())
@@ -49,8 +51,11 @@ func addRoutes(
 	// ── Wallet — payment provider webhooks (no JWT — secured by signature) ───
 	mux.Handle("POST /api/v1/webhooks/deposit", wallet.HandleDepositWebhook(walletUc))
 
-	// ── Wallet — admin facing (JWT required) ─────────────────────────────────
+	// ── Admin Wallet (JWT required) ──────────────────────────────────────────
 	mux.Handle("GET /api/v1/admin/wallet/withdrawals", jwt(wallet.HandleAdminListWithdrawals(adminWalletUc)))
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/approve", jwt(wallet.HandleAdminApproveWithdrawal(adminWalletUc)))
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/reject", jwt(wallet.HandleAdminRejectWithdrawal(adminWalletUc)))
+
+	// ── Market — user facing (WebSocket) ─────────────────────────────────────
+	mux.Handle("GET /api/v1/market/stream", market.HandleWebSocket(marketHub))
 }
