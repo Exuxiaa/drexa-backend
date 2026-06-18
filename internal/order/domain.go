@@ -77,6 +77,20 @@ type Service interface {
 	OrderBookDepth(ctx context.Context, pairID string, maxLevels int) (*OrderBookSnapshot, error)
 }
 
+// TradeEvent is emitted after a match prints one or more trades, carrying the
+// last executed price for a pair. The market ticker feed consumes it to publish
+// a real-time, trade-driven ticker over the WebSocket. Decoupled from the market
+// domain: the observer is supplied as a plain callback in cmd/server.
+type TradeEvent struct {
+	PairID   string
+	Price    float64 // last executed price
+	Quantity float64 // total quantity traded this match
+}
+
+// TradeObserver is notified after each match that produces trades. Optional;
+// a nil observer disables trade-driven ticker updates.
+type TradeObserver func(TradeEvent)
+
 // OrderBookLevel is one aggregated price level: total resting quantity at a price.
 type OrderBookLevel struct {
 	Price    float64 `json:"price"`

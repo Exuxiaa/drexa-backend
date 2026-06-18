@@ -13,12 +13,15 @@ type service struct {
 	repo    Repository
 	pairs   PairService
 	matcher Matcher
+	onTrade TradeObserver // optional; notified after each match that prints trades
 }
 
 // NewService wires the order service with its persistence, the market-backed
-// trading-pair lookup, and the in-memory matching engine.
-func NewService(repo Repository, pairs PairService, matcher Matcher) Service {
-	return &service{repo: repo, pairs: pairs, matcher: matcher}
+// trading-pair lookup, and the in-memory matching engine. onTrade is optional
+// (may be nil) and is invoked with the last executed price after every match
+// that produces trades, driving the real-time market ticker.
+func NewService(repo Repository, pairs PairService, matcher Matcher, onTrade TradeObserver) Service {
+	return &service{repo: repo, pairs: pairs, matcher: matcher, onTrade: onTrade}
 }
 
 // CreateOrder validates the request, persists the order in a pending state,
@@ -155,7 +158,25 @@ func (s *service) applyResult(ctx context.Context, taker *Order, result matching
 	// Finally the taker itself.
 	taker.FilledQuantity += fillDelta[taker.OrderID]
 	taker.Status = deriveStatus(taker, result.Rested)
-	return s.repo.Update(ctx, taker)
+	if err := s.repo.Update(ctx, taker); err != nil {
+		return err
+	}
+
+	// Notify the ticker feed of the last executed price so it can publish a
+	// real-time, trade-driven ticker. Only fires when a match actually printed.
+	if s.onTrade != nil && len(result.Trades) > 0 {
+		last := result.Trades[len(result.Trades)-1]
+		var totalQty float64
+		for _, t := range result.Trades {
+			totalQty += lotsToQty(t.Quantity)
+		}
+		s.onTrade(TradeEvent{
+			PairID:   taker.PairID,
+			Price:    ticksToPrice(last.Price, priceDec),
+			Quantity: totalQty,
+		})
+	}
+	return nil
 }
 
 // OrderBookDepth returns the live aggregated book for a pair, converting the

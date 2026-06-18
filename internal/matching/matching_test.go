@@ -148,6 +148,45 @@ func TestCancelRemovesResting(t *testing.T) {
 	}
 }
 
+// TestMakerPartialFill verifies the exact scenario reported by the frontend:
+// SELL 50 rests, BUY 10 arrives → SELL 40 must still be visible in the book.
+func TestMakerPartialFillRemainsInBook(t *testing.T) {
+	ob := NewOrderBook()
+	ob.Place(limit("a1", "maker", SideSell, 100000, 50)) // SELL 50 @ 100000
+
+	res := ob.Place(limit("b1", "taker", SideBuy, 100000, 10)) // BUY 10 @ 100000
+
+	if len(res.Trades) != 1 {
+		t.Fatalf("expected 1 trade, got %d", len(res.Trades))
+	}
+	if res.Trades[0].Quantity != 10 {
+		t.Errorf("expected trade qty 10, got %d", res.Trades[0].Quantity)
+	}
+
+	// Taker is fully filled and must not rest.
+	if !res.Taker.IsFilled() {
+		t.Error("taker (BUY 10) should be fully filled")
+	}
+	if res.Rested {
+		t.Error("fully-filled taker should not rest on the book")
+	}
+
+	// The maker's remainder (SELL 40) must still be in the ask book.
+	ask := ob.BestAsk()
+	if ask == nil {
+		t.Fatal("ask book must not be empty: SELL 40 should remain")
+	}
+	if ask.Price != 100000 {
+		t.Errorf("expected ask price 100000, got %d", ask.Price)
+	}
+	if ask.Volume() != 40 {
+		t.Errorf("expected remaining ask volume 40, got %d", ask.Volume())
+	}
+	if ask.Len() != 1 {
+		t.Errorf("expected 1 resting order at level, got %d", ask.Len())
+	}
+}
+
 func TestEngineRoutesByPair(t *testing.T) {
 	e := NewEngine()
 	e.Submit("BTC_IDR", limit("a1", "m1", SideSell, 100, 5))

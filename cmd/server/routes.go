@@ -23,6 +23,8 @@ func addRoutes(
 	adminWalletUc wallet.AdminWalletUsecase,
 	cryptoWalletUc wallet.CryptoWalletUsecase,
 	marketHub *market.Hub,
+	binance *market.BinanceClient,
+	tickerCache *market.TickerCache,
 	tokenSvc auth.TokenService,
 	checkoutH *checkout.Handler,
 	p2pH *p2p.Handler,
@@ -110,10 +112,11 @@ func addRoutes(
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/approve", jwt(admin(wallet.HandleAdminApproveWithdrawal(adminWalletUc))))
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/reject", jwt(admin(wallet.HandleAdminRejectWithdrawal(adminWalletUc))))
 
-	// ── Market data (public real-time WebSocket feed: our own order book) ─────
+	// ── Market data (public) ──────────────────────────────────────────────────
 	mux.Handle("/api/v1/market/ws", market.HandleWebSocket(marketHub))
-	// Order book depth snapshot (public market data).
 	mux.Handle("GET /api/v1/market/orderbook/{pairID}", order.HandleOrderBook(orderSvc))
+	mux.Handle("GET /api/v1/market/klines", market.HandleKlines(binance))
+	mux.Handle("GET /api/v1/market/tickers", market.HandleTickers(tickerCache))
 
 	// ── P2P marketplace (on-chain escrow) ─────────────────────────────────────
 	// Advertisements

@@ -158,7 +158,6 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	orderRepository := orderRepo.New(db)
 	pairService := orderRepo.NewPairService(db)
 	matchingEngine := matching.NewEngine()
-	orderService := order.NewService(orderRepository, pairService, matchingEngine)
 
 	// ── Wallet domain ─────────────────────────────────────────────────────────
 	walletRepository := walletRepo.NewWalletRepository(db)
@@ -183,15 +182,29 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	adminWalletUsecase   := walletUc.NewAdminWalletUsecase(walletRepository, txRepository, withdrawalRepository, disbursementService, txManager)
 	cryptoWalletUsecase  := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
 
-	// ── Market data (real-time WebSocket feed) ─────────────────────────────────
-	// The /market/ws feed now publishes our own order-book depth, sourced from
-	// the in-memory matching engine, instead of the external Binance stream.
+	// ── Market data (real-time WebSocket feed + REST market data) ─────────────
+	// The /market/ws feed publishes our own order-book depth (sourced from the
+	// in-memory matching engine) plus a ticker that is driven by our executed
+	// trades for the price and by Binance for the 24h stats.
+	pairLister := &pairListerAdapter{db: db}
 	marketHub := market.NewHub()
 	go marketHub.Run()
+
+	binance := market.NewBinanceClient()
+	tickerCache := market.NewTickerCache(binance, pairLister)
+	go tickerCache.Run(context.Background())
+	tickerFeed := market.NewTickerFeed(marketHub, tickerCache)
+	go tickerFeed.Run(context.Background())
+
+	// The order service emits each executed trade's price into the ticker feed,
+	// which broadcasts a real-time ticker the instant a trade prints.
+	orderService := order.NewService(orderRepository, pairService, matchingEngine,
+		func(ev order.TradeEvent) { tickerFeed.RecordTrade(ev.PairID, ev.Price) })
+
 	orderBookFeed := market.NewOrderBookFeed(
 		marketHub,
 		&depthSourceAdapter{orders: orderService},
-		&pairListerAdapter{db: db},
+		pairLister,
 	)
 	go orderBookFeed.Run(context.Background())
 
@@ -234,7 +247,7 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 
 	// ── HTTP ──────────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
-	addRoutes(mux, cfg, authUsecase, kycHandler, orderService, walletUsecase, adminWalletUsecase, cryptoWalletUsecase, marketHub, tokenService, checkoutHandler, p2pHandler)
+	addRoutes(mux, cfg, authUsecase, kycHandler, orderService, walletUsecase, adminWalletUsecase, cryptoWalletUsecase, marketHub, binance, tickerCache, tokenService, checkoutHandler, p2pHandler)
 
 	// CORS must run before everything else so it can answer preflight OPTIONS
 	// and attach credential headers to every response.
