@@ -20,6 +20,8 @@ import (
 	"drexa/internal/config"
 	firebaseInfra "drexa/internal/infrastructure/firebase"
 	"drexa/internal/market"
+	"drexa/internal/sharedwallet"
+	"drexa/internal/tatum"
 	walletRepo "drexa/internal/wallet/repository"
 	walletSvc "drexa/internal/wallet/service"
 	walletUc "drexa/internal/wallet/usecase"
@@ -90,6 +92,36 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 		paymentService,
 	)
 
+	// ── Shared Wallet Services (Crypto) ──────────────────────────────────────
+	var sharedWalletSvc sharedwallet.WalletService
+	var sharedTransferSvc sharedwallet.InternalTransferService
+	var sharedTxRepo sharedwallet.TransactionRepository
+
+	if fb != nil && fb.Firestore != nil {
+		tatumClient := tatum.NewClient(cfg.Tatum)
+		log.Printf("Tatum client initialized | env=%s | btc_chain=%s | eth_chain=%s", cfg.Tatum.Env, cfg.Tatum.BTCChain, cfg.Tatum.ETHChain)
+
+		sharedWalletRepo := sharedwallet.NewFirestoreWalletRepository(fb.Firestore)
+		sharedTxRepo = sharedwallet.NewFirestoreTransactionRepository(fb.Firestore)
+		sharedCacheRepo := sharedwallet.NewRedisCacheRepository(rdb)
+
+		sharedWalletSvc = sharedwallet.NewWalletService(
+			sharedWalletRepo,
+			sharedTxRepo,
+			sharedCacheRepo,
+			tatumClient,
+			cfg.Tatum,
+			fb.Firestore,
+		)
+		sharedTransferSvc = sharedwallet.NewInternalTransferService(
+			fb.Firestore,
+			sharedTxRepo,
+			sharedCacheRepo,
+		)
+	} else {
+		log.Println("warning: sharedwallet services disabled because firestore is not initialized")
+	}
+
 	// ── Market Service ───────────────────────────────────────────────────────
 	marketHub := market.NewHub()
 	go marketHub.Run()
@@ -97,7 +129,7 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 	binanceClient := market.NewBinanceWSClient(marketHub)
 	go binanceClient.Run()
 
-	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, fbVerifier, walletUsecase, adminWalletUsecase, marketHub, cfg.App.Env == "production")
+	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, fbVerifier, walletUsecase, adminWalletUsecase, sharedWalletSvc, sharedTransferSvc, sharedTxRepo, marketHub, cfg.App.Env == "production")
 
 	return &Server{
 		httpServer: &http.Server{

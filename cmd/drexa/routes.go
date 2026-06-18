@@ -5,6 +5,7 @@ import (
 
 	"drexa/internal/auth"
 	"drexa/internal/market"
+	"drexa/internal/sharedwallet"
 	"drexa/internal/wallet"
 )
 
@@ -17,6 +18,9 @@ func addRoutes(
 	fbVerifier auth.FirebaseVerifier,
 	walletUc wallet.WalletUsecase,
 	adminWalletUc wallet.AdminWalletUsecase,
+	sharedWalletUc sharedwallet.WalletService,
+	sharedTransferUc sharedwallet.InternalTransferService,
+	sharedTxRepo sharedwallet.TransactionRepository,
 	marketHub *market.Hub,
 	secureCookies bool,
 ) {
@@ -55,6 +59,16 @@ func addRoutes(
 	mux.Handle("GET /api/v1/admin/wallet/withdrawals", jwt(wallet.HandleAdminListWithdrawals(adminWalletUc)))
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/approve", jwt(wallet.HandleAdminApproveWithdrawal(adminWalletUc)))
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/reject", jwt(wallet.HandleAdminRejectWithdrawal(adminWalletUc)))
+
+	// ── Shared Wallet — user facing (JWT required) ───────────────────────────
+	mux.Handle("POST /api/v1/sharedwallet/create", jwt(sharedwallet.HandleCreateWallet(sharedWalletUc)))
+	mux.Handle("GET /api/v1/sharedwallet/balance", jwt(sharedwallet.HandleGetBalance(sharedWalletUc)))
+	mux.Handle("POST /api/v1/sharedwallet/withdraw", jwt(sharedwallet.HandleWithdraw(sharedWalletUc)))
+	mux.Handle("POST /api/v1/sharedwallet/transfer", jwt(sharedwallet.HandleTransfer(sharedTransferUc)))
+	mux.Handle("GET /api/v1/sharedwallet/transactions", jwt(sharedwallet.HandleGetTransactions(sharedTxRepo)))
+
+	// ── Shared Wallet — payment provider webhooks ────────────────────────────
+	mux.Handle("POST /api/v1/webhooks/tatum/deposit", sharedwallet.HandleTatumDepositWebhook(sharedWalletUc))
 
 	// ── Market — user facing (WebSocket) ─────────────────────────────────────
 	mux.Handle("GET /api/v1/market/stream", market.HandleWebSocket(marketHub))

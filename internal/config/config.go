@@ -17,6 +17,7 @@ type Config struct {
 	Firebase FirebaseConfig
 	Twilio   TwilioConfig
 	SendGrid SendGridConfig
+	Tatum    TatumConfig
 }
 
 type TwilioConfig struct {
@@ -30,6 +31,17 @@ type SendGridConfig struct {
 	FromEmail string
 	FromName  string
 	AppURL    string
+}
+
+type TatumConfig struct {
+	APIKey              string
+	Env                 string
+	IsMainnet           bool
+	WebhookURL          string
+	BTCChain            string
+	ETHChain            string
+	BTCMasterPrivateKey string
+	ETHMasterPrivateKey string
 }
 
 type AppConfig struct {
@@ -108,6 +120,39 @@ func Load() *Config {
 			FromName:  getEnv("SENDGRID_FROM_NAME", "Drexa"),
 			AppURL:    getEnv("APP_URL", "http://localhost:3000"),
 		},
+		Tatum: loadTatumConfig(),
+	}
+}
+
+func loadTatumConfig() TatumConfig {
+	env := mustGetEnv("TATUM_ENV")
+
+	var apiKey, btcChain, ethChain string
+	var isMainnet bool
+
+	if env == "mainnet" {
+		apiKey = mustGetEnv("TATUM_API_KEY_MAINNET")
+		isMainnet = true
+		btcChain = "BTC"
+		ethChain = "ETH"
+	} else if env == "testnet" {
+		apiKey = mustGetEnv("TATUM_API_KEY_TESTNET")
+		isMainnet = false
+		btcChain = "BTC_TEST"
+		ethChain = "ETH_SEPOLIA"
+	} else {
+		log.Fatalf("TATUM_ENV must be either 'mainnet' or 'testnet'")
+	}
+
+	return TatumConfig{
+		APIKey:              apiKey,
+		Env:                 env,
+		IsMainnet:           isMainnet,
+		WebhookURL:          mustGetEnv("TATUM_WEBHOOK_BASE_URL"),
+		BTCChain:            btcChain,
+		ETHChain:            ethChain,
+		BTCMasterPrivateKey: mustGetEnv("BTC_MASTER_PRIVATE_KEY"),
+		ETHMasterPrivateKey: mustGetEnv("ETH_MASTER_PRIVATE_KEY"),
 	}
 }
 

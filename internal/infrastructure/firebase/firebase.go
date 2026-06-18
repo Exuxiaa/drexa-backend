@@ -8,13 +8,15 @@ import (
 	fb "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
 	"google.golang.org/api/option"
+	"cloud.google.com/go/firestore"
 
 	"drexa/internal/config"
 )
 
 type Client struct {
-	App  *fb.App
-	Auth *auth.Client
+	App       *fb.App
+	Auth      *auth.Client
+	Firestore *firestore.Client
 }
 
 func New(ctx context.Context, cfg config.FirebaseConfig) (*Client, error) {
@@ -39,5 +41,10 @@ func New(ctx context.Context, cfg config.FirebaseConfig) (*Client, error) {
 		return nil, fmt.Errorf("failed to initialize firebase auth: %w", err)
 	}
 
-	return &Client{App: app, Auth: authClient}, nil
+	firestoreClient, err := app.Firestore(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize firestore: %w", err)
+	}
+
+	return &Client{App: app, Auth: authClient, Firestore: firestoreClient}, nil
 }
