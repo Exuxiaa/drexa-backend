@@ -53,7 +53,12 @@ type SendGridConfig struct {
 }
 
 type TatumConfig struct {
-	APIKey  string
+	APIKey        string
+	BTCGatewayURL string
+	ETHGatewayURL string
+	BTCAddress    string
+	BTCPrivateKey string
+	ETHPrivateKey string
 }
 
 type StripeConfig struct {
@@ -117,7 +122,12 @@ func Load() *Config {
 			AppURL:    viper.GetString("APP_URL"),
 		},
 		Tatum: TatumConfig{
-			APIKey: viper.GetString("TATUM_TESTNET_API_KEY"),
+			APIKey:        viper.GetString("TATUM_TESTNET_API_KEY"),
+			BTCGatewayURL: viper.GetString("TATUM_BTC_GATEWAY_URL"),
+			ETHGatewayURL: viper.GetString("TATUM_ETH_GATEWAY_URL"),
+			BTCAddress:    viper.GetString("BTC_MASTER_ADDRESS"),
+			BTCPrivateKey: viper.GetString("BTC_MASTER_PRIVATE_KEY"),
+			ETHPrivateKey: viper.GetString("ETH_MASTER_PRIVATE_KEY"),
 		},
 		Stripe: StripeConfig{
 			SecretKey:      viper.GetString("STRIPE_SECRET_KEY"),
