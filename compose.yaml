@@ -29,8 +29,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
     
+  # Reverse proxy — only started when "ngrok" is in COMPOSE_PROFILES (see .env).
+  # Leave COMPOSE_PROFILES empty to run on localhost without the public tunnel.
   ngrok:
     image: ngrok/ngrok:latest
+    profiles: ["ngrok"]
     restart: unless-stopped
     command: http server:8080
     environment:

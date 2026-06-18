@@ -135,3 +135,13 @@ ESCROW_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f
 # Filled in after you deploy P2PEscrow (see contracts/README.md).
 ESCROW_CONTRACT_ADDRESS=
 ESCROW_CONFIRM_TIMEOUT=90s
+
+
+# ===================
+#  NGROK
+# ===================
+# Toggle the ngrok reverse proxy. Docker Compose reads COMPOSE_PROFILES from
+# this file: set it to "ngrok" to start the public tunnel (needed so Tatum/Stripe
+# webhooks can reach the local server). Leave it empty to run on localhost only.
+COMPOSE_PROFILES=ngrok
+NGROK_AUTHTOKEN=
