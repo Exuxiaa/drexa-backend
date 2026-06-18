@@ -21,6 +21,8 @@ func (ob *OrderBook) Place(taker *Order) MatchResult {
 		result.Rested = true
 	}
 
+	ob.version++ // book may have changed; signal the depth feed
+
 	return result
 }
 

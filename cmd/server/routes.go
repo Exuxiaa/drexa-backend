@@ -29,7 +29,7 @@ func addRoutes(
 ) {
 	mux.Handle("/", http.NotFoundHandler())
 
-	jwt   := auth.JWTMiddleware(tokenSvc)
+	jwt := auth.JWTMiddleware(tokenSvc)
 	admin := auth.RequireRole(auth.RoleAdmin)
 
 	// ── Checkout (Stripe Managed Payments) ────────────────────────────────────
@@ -41,10 +41,10 @@ func addRoutes(
 
 	// ── Public auth ───────────────────────────────────────────────────────────
 	mux.Handle("POST /api/v1/auth/register", auth.HandleRegister(authUc))
-	mux.Handle("POST /api/v1/auth/login",    auth.HandleLogin(authUc))
-	mux.Handle("POST /api/v1/auth/google",   auth.HandleGoogleLogin(authUc))
-	mux.Handle("POST /api/v1/auth/logout",   auth.HandleLogout(authUc))
-	mux.Handle("POST /api/v1/auth/refresh",  auth.HandleRefreshToken(authUc))
+	mux.Handle("POST /api/v1/auth/login", auth.HandleLogin(authUc))
+	mux.Handle("POST /api/v1/auth/google", auth.HandleGoogleLogin(authUc))
+	mux.Handle("POST /api/v1/auth/logout", auth.HandleLogout(authUc))
+	mux.Handle("POST /api/v1/auth/refresh", auth.HandleRefreshToken(authUc))
 
 	// ── Protected auth (JWT required) ─────────────────────────────────────────
 	mux.Handle("GET /api/v1/auth/me",                jwt(auth.HandleGetMe(authUc)))
@@ -52,18 +52,18 @@ func addRoutes(
 	mux.Handle("POST /api/v1/auth/password/change",  jwt(auth.HandleChangePassword(authUc)))
 	mux.Handle("POST /api/v1/auth/otp/phone/send",   jwt(auth.HandleSendPhoneOTP(authUc)))
 	mux.Handle("POST /api/v1/auth/otp/phone/verify", jwt(auth.HandleVerifyPhoneOTP(authUc)))
-	mux.Handle("POST /api/v1/auth/pin/set",          jwt(auth.HandleSetTradingPIN(authUc)))
-	mux.Handle("POST /api/v1/auth/pin/verify",       jwt(auth.HandleVerifyTradingPIN(authUc)))
+	mux.Handle("POST /api/v1/auth/pin/set", jwt(auth.HandleSetTradingPIN(authUc)))
+	mux.Handle("POST /api/v1/auth/pin/verify", jwt(auth.HandleVerifyTradingPIN(authUc)))
 
 	// ── 2FA (TOTP) ────────────────────────────────────────────────────────────
-	mux.Handle("POST /api/v1/auth/login/2fa",  auth.HandleLoginTwoFA(authUc, tokenSvc))
-	mux.Handle("POST /api/v1/auth/2fa/setup",  jwt(auth.HandleTwoFASetup(authUc)))
+	mux.Handle("POST /api/v1/auth/login/2fa", auth.HandleLoginTwoFA(authUc, tokenSvc))
+	mux.Handle("POST /api/v1/auth/2fa/setup", jwt(auth.HandleTwoFASetup(authUc)))
 	mux.Handle("POST /api/v1/auth/2fa/enable", jwt(auth.HandleTwoFAEnable(authUc)))
-	mux.Handle("POST /api/v1/auth/2fa/disable",jwt(auth.HandleTwoFADisable(authUc)))
+	mux.Handle("POST /api/v1/auth/2fa/disable", jwt(auth.HandleTwoFADisable(authUc)))
 
 	// ── KYC — user facing (JWT required) ──────────────────────────────────────
 	mux.Handle("POST /api/v1/kyc/submit", jwt(http.HandlerFunc(kycH.HandleSubmit)))
-	mux.Handle("GET /api/v1/kyc/status",  jwt(http.HandlerFunc(kycH.HandleGetStatus)))
+	mux.Handle("GET /api/v1/kyc/status", jwt(http.HandlerFunc(kycH.HandleGetStatus)))
 
 	// ── KYC — Didit identity verification ─────────────────────────────────────
 	mux.Handle("POST /api/v1/kyc/didit/session", jwt(http.HandlerFunc(kycH.HandleStartDiditVerification)))
@@ -71,14 +71,14 @@ func addRoutes(
 	mux.Handle("POST /api/v1/kyc/didit/webhook", http.HandlerFunc(kycH.HandleDiditWebhook))
 
 	// ── KYC — admin facing (JWT + admin role) ─────────────────────────────────
-	mux.Handle("GET /api/v1/admin/kyc",                    jwt(admin(http.HandlerFunc(kycH.HandleAdminList))))
-	mux.Handle("GET /api/v1/admin/kyc/{id}",               jwt(admin(http.HandlerFunc(kycH.HandleAdminGet))))
-	mux.Handle("POST /api/v1/admin/kyc/{id}/approve",      jwt(admin(http.HandlerFunc(kycH.HandleAdminApprove))))
-	mux.Handle("POST /api/v1/admin/kyc/{id}/reject",       jwt(admin(http.HandlerFunc(kycH.HandleAdminReject))))
+	mux.Handle("GET /api/v1/admin/kyc", jwt(admin(http.HandlerFunc(kycH.HandleAdminList))))
+	mux.Handle("GET /api/v1/admin/kyc/{id}", jwt(admin(http.HandlerFunc(kycH.HandleAdminGet))))
+	mux.Handle("POST /api/v1/admin/kyc/{id}/approve", jwt(admin(http.HandlerFunc(kycH.HandleAdminApprove))))
+	mux.Handle("POST /api/v1/admin/kyc/{id}/reject", jwt(admin(http.HandlerFunc(kycH.HandleAdminReject))))
 
 	// ── Orders (JWT required) ─────────────────────────────────────────────────
-	mux.Handle("POST /api/v1/orders",               jwt(order.HandleOrder(orderSvc)))
-	mux.Handle("DELETE /api/v1/orders/{orderID}",   jwt(order.HandleCancelOrder(orderSvc)))
+	mux.Handle("POST /api/v1/orders", jwt(order.HandleOrder(orderSvc)))
+	mux.Handle("DELETE /api/v1/orders/{orderID}", jwt(order.HandleCancelOrder(orderSvc)))
 
 	// ── Payments — Stripe PaymentIntent (embedded Elements flow) ──────────────
 	// The frontend's DepositPanel posts here to get a client_secret for Stripe.js.
@@ -87,7 +87,7 @@ func addRoutes(
 	mux.Handle("POST /api/v1/payments/webhook",        wallet.HandleDepositWebhook(walletUc, cfg.Stripe.WebhookSecret))
 
 	// ── Wallet — user facing (JWT required) ───────────────────────────────────
-	mux.Handle("GET /api/v1/wallet/balances",            jwt(wallet.HandleGetBalances(walletUc)))
+	mux.Handle("GET /api/v1/wallet/balances", jwt(wallet.HandleGetBalances(walletUc)))
 	mux.Handle("GET /api/v1/wallet/balances/{currency}", jwt(wallet.HandleGetBalance(walletUc)))
 	// Singular alias — the frontend calls GET /wallet/balance/{currency}.
 	mux.Handle("GET /api/v1/wallet/balance/{currency}",  jwt(wallet.HandleGetBalance(walletUc)))
@@ -98,19 +98,19 @@ func addRoutes(
 
 	// ── Wallet — Crypto (JWT required) ────────────────────────────────────────
 	mux.Handle("GET /api/v1/wallet/crypto/address/{currency}", jwt(wallet.HandleGetCryptoAddress(cryptoWalletUc)))
-	mux.Handle("GET /api/v1/wallet/crypto/assets",             jwt(wallet.HandleGetCryptoAssets(cryptoWalletUc)))
-	mux.Handle("POST /api/v1/wallet/crypto/withdraw",          jwt(wallet.HandleCryptoWithdrawal(walletUc)))
+	mux.Handle("GET /api/v1/wallet/crypto/assets", jwt(wallet.HandleGetCryptoAssets(cryptoWalletUc)))
+	mux.Handle("POST /api/v1/wallet/crypto/withdraw", jwt(wallet.HandleCryptoWithdrawal(walletUc)))
 
 	// ── Wallet — payment provider webhook (public; verify signature in prod) ───
 	mux.Handle("POST /api/v1/wallet/deposit/webhook", wallet.HandleDepositWebhook(walletUc, cfg.Stripe.WebhookSecret))
-	mux.Handle("POST /api/v1/wallet/crypto/webhook",  wallet.HandleCryptoWebhook(cryptoWalletUc))
+	mux.Handle("POST /api/v1/wallet/crypto/webhook", wallet.HandleCryptoWebhook(cryptoWalletUc))
 
 	// ── Wallet — admin facing (JWT + admin role) ──────────────────────────────
-	mux.Handle("GET /api/v1/admin/wallet/withdrawals",                       jwt(admin(wallet.HandleAdminListWithdrawals(adminWalletUc))))
+	mux.Handle("GET /api/v1/admin/wallet/withdrawals", jwt(admin(wallet.HandleAdminListWithdrawals(adminWalletUc))))
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/approve", jwt(admin(wallet.HandleAdminApproveWithdrawal(adminWalletUc))))
-	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/reject",  jwt(admin(wallet.HandleAdminRejectWithdrawal(adminWalletUc))))
+	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/reject", jwt(admin(wallet.HandleAdminRejectWithdrawal(adminWalletUc))))
 
-	// ── Market data (public real-time WebSocket feed) ─────────────────────────
+	// ── Market data (public real-time WebSocket feed: our own order book) ─────
 	mux.Handle("/api/v1/market/ws", market.HandleWebSocket(marketHub))
 	// Order book depth snapshot (public market data).
 	mux.Handle("GET /api/v1/market/orderbook/{pairID}", order.HandleOrderBook(orderSvc))

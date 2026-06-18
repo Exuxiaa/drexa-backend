@@ -158,34 +158,35 @@ func (s *service) applyResult(ctx context.Context, taker *Order, result matching
 	return s.repo.Update(ctx, taker)
 }
 
-// GetOrderBook returns a depth snapshot of a pair's resting book, converting
-// the engine's integer ticks/lots back into the pair's human-readable units.
-func (s *service) GetOrderBook(ctx context.Context, pairID string, depth int) (*OrderBook, error) {
+// OrderBookDepth returns the live aggregated book for a pair, converting the
+// engine's integer ticks/lots back into real prices using the pair's quoted
+// precision.
+func (s *service) OrderBookDepth(ctx context.Context, pairID string, maxLevels int) (*OrderBookSnapshot, error) {
 	pair, err := s.pairs.GetPair(ctx, pairID)
 	if err != nil {
 		return nil, err
 	}
 
-	snap := s.matcher.Snapshot(pairID, depth)
+	depth := s.matcher.Depth(pairID, maxLevels)
+	snap := &OrderBookSnapshot{
+		PairID:  pairID,
+		Version: depth.Version,
+		Bids:    toBookLevels(depth.Bids, pair.PriceDecimals),
+		Asks:    toBookLevels(depth.Asks, pair.PriceDecimals),
+	}
+	return snap, nil
+}
 
-	ob := &OrderBook{
-		PairID: pairID,
-		Bids:   make([]OrderBookLevel, 0, len(snap.Bids)),
-		Asks:   make([]OrderBookLevel, 0, len(snap.Asks)),
+// toBookLevels converts engine tick/lot levels into float price levels.
+func toBookLevels(levels []matching.DepthLevel, priceDec int) []OrderBookLevel {
+	out := make([]OrderBookLevel, len(levels))
+	for i, l := range levels {
+		out[i] = OrderBookLevel{
+			Price:    ticksToPrice(l.Price, priceDec),
+			Quantity: lotsToQty(l.Volume),
+		}
 	}
-	for _, l := range snap.Bids {
-		ob.Bids = append(ob.Bids, OrderBookLevel{
-			Price:    ticksToPrice(l.Price, pair.PriceDecimals),
-			Quantity: lotsToQty(l.Quantity),
-		})
-	}
-	for _, l := range snap.Asks {
-		ob.Asks = append(ob.Asks, OrderBookLevel{
-			Price:    ticksToPrice(l.Price, pair.PriceDecimals),
-			Quantity: lotsToQty(l.Quantity),
-		})
-	}
-	return ob, nil
+	return out
 }
 
 // CancelOrder removes a still-open order from the book and marks it cancelled.

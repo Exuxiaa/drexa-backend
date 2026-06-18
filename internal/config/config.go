@@ -14,8 +14,6 @@ type Config struct {
 	App      AppConfig
 	DB       DBConfig
 	JWT      JWTConfig
-	Redis    RedisConfig
-	Firebase FirebaseConfig
 	Twilio   TwilioConfig
 	SendGrid SendGridConfig
 	Tatum    TatumConfig
@@ -67,18 +65,6 @@ type JWTConfig struct {
 	Expiration time.Duration
 }
 
-type RedisConfig struct {
-	Addr     string
-	Password string
-	DB       int
-	TLS      bool
-}
-
-type FirebaseConfig struct {
-	CredentialsJSON string
-	ProjectID       string
-}
-
 func Load() *Config {
 	if err := godotenv.Load(); err != nil {
 		log.Println("no .env file found, reading from environment")
@@ -109,16 +95,6 @@ func Load() *Config {
 		JWT: JWTConfig{
 			Secret:     mustGetEnv("JWT_SECRET"),
 			Expiration: getEnvDuration("JWT_EXPIRATION", 24*time.Hour),
-		},
-		Redis: RedisConfig{
-			Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
-			Password: getEnv("REDIS_PASSWORD", ""),
-			DB:       getEnvInt("REDIS_DB", 0),
-			TLS:      getEnvBool("REDIS_TLS", false),
-		},
-		Firebase: FirebaseConfig{
-			CredentialsJSON: getEnv("FIREBASE_CREDENTIALS_JSON", ""),
-			ProjectID:       getEnv("FIREBASE_PROJECT_ID", ""),
 		},
 		Twilio: TwilioConfig{
 			AccountSID: getEnv("TWILIO_ACCOUNT_SID", ""),

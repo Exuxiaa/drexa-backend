@@ -15,5 +15,6 @@ func (ob *OrderBook) Cancel(orderID string) (*Order, error) {
 		return nil, ErrOrderNotResting
 	}
 	ob.removeOrder(o)
+	ob.version++ // book changed; signal the depth feed
 	return o, nil
 }

@@ -66,30 +66,31 @@ type Trade struct {
 	ExecutedAt   time.Time `gorm:"column:executed_at;autoCreateTime"`
 }
 
-// OrderBookLevel is one aggregated price level of a depth snapshot, in human
-// (float) units rather than the engine's integer ticks/lots.
-type OrderBookLevel struct {
-	Price    float64 `json:"price"`
-	Quantity float64 `json:"quantity"`
-}
-
-// OrderBook is a depth snapshot for a pair, best price first on each side
-// (bids high→low, asks low→high).
-type OrderBook struct {
-	PairID string           `json:"pair_id"`
-	Bids   []OrderBookLevel `json:"bids"`
-	Asks   []OrderBookLevel `json:"asks"`
-}
-
 // ─── Service & Repository Interfaces ─────────────────────────────────────────
 
 // Service is the order domain's business-logic entrypoint.
 type Service interface {
 	CreateOrder(ctx context.Context, userID string, req OrderRequest) (*Order, error)
 	CancelOrder(ctx context.Context, userID, orderID string) (*Order, error)
-	// GetOrderBook returns a depth snapshot of a pair's resting book, capped to
-	// depth levels per side (depth <= 0 returns all levels).
-	GetOrderBook(ctx context.Context, pairID string, depth int) (*OrderBook, error)
+	// OrderBookDepth returns the live aggregated book for a pair in real
+	// (float) prices, best prices first. maxLevels <= 0 returns every level.
+	OrderBookDepth(ctx context.Context, pairID string, maxLevels int) (*OrderBookSnapshot, error)
+}
+
+// OrderBookLevel is one aggregated price level: total resting quantity at a price.
+type OrderBookLevel struct {
+	Price    float64 `json:"price"`
+	Quantity float64 `json:"quantity"`
+}
+
+// OrderBookSnapshot is a point-in-time view of a pair's book, best prices first
+// (bids highest first, asks lowest first). Version is the engine's mutation
+// counter at snapshot time, for gap detection and update de-duplication.
+type OrderBookSnapshot struct {
+	PairID  string           `json:"pair_id"`
+	Version uint64           `json:"version"`
+	Bids    []OrderBookLevel `json:"bids"`
+	Asks    []OrderBookLevel `json:"asks"`
 }
 
 // Repository persists orders and trades.
@@ -108,7 +109,7 @@ type Repository interface {
 type Matcher interface {
 	Submit(pairID string, o *matching.Order) matching.MatchResult
 	Cancel(pairID, orderID string) (*matching.Order, error)
-	Snapshot(pairID string, depth int) matching.BookSnapshot
+	Depth(pairID string, maxLevels int) matching.Depth
 }
 
 // PairInfo is the minimal trading-pair data the order domain needs.

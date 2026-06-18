@@ -54,6 +54,48 @@ func (a *kycUserServiceAdapter) UpdateKycLevel(ctx context.Context, userID, revi
 	return a.repo.UpdateKycLevel(ctx, userID, reviewedBy, level)
 }
 
+// depthSourceAdapter bridges the order service to market.DepthSource so the
+// market feed reads order-book depth without importing internal/order.
+type depthSourceAdapter struct {
+	orders order.Service
+}
+
+func (a *depthSourceAdapter) OrderBookDepth(ctx context.Context, pairID string, maxLevels int) (*market.OrderBookSnapshot, error) {
+	snap, err := a.orders.OrderBookDepth(ctx, pairID, maxLevels)
+	if err != nil {
+		return nil, err
+	}
+	return &market.OrderBookSnapshot{
+		PairID:  snap.PairID,
+		Version: snap.Version,
+		Bids:    toMarketLevels(snap.Bids),
+		Asks:    toMarketLevels(snap.Asks),
+	}, nil
+}
+
+func toMarketLevels(levels []order.OrderBookLevel) []market.BookLevel {
+	out := make([]market.BookLevel, len(levels))
+	for i, l := range levels {
+		out[i] = market.BookLevel{Price: l.Price, Quantity: l.Quantity}
+	}
+	return out
+}
+
+// pairListerAdapter lists active trading pairs from the market.TradingPair
+// table, satisfying market.PairLister.
+type pairListerAdapter struct {
+	db *gorm.DB
+}
+
+func (a *pairListerAdapter) ActivePairIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	err := a.db.WithContext(ctx).
+		Model(&market.TradingPair{}).
+		Where("status = ?", market.StatusActive).
+		Pluck("pair_id", &ids).Error
+	return ids, err
+}
+
 type Server struct {
 	httpServer *http.Server
 }
@@ -142,9 +184,16 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	cryptoWalletUsecase  := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
 
 	// ── Market data (real-time WebSocket feed) ─────────────────────────────────
+	// The /market/ws feed now publishes our own order-book depth, sourced from
+	// the in-memory matching engine, instead of the external Binance stream.
 	marketHub := market.NewHub()
 	go marketHub.Run()
-	go market.NewBinanceWSClient(marketHub).Run()
+	orderBookFeed := market.NewOrderBookFeed(
+		marketHub,
+		&depthSourceAdapter{orders: orderService},
+		&pairListerAdapter{db: db},
+	)
+	go orderBookFeed.Run(context.Background())
 
 	// ── P2P marketplace (on-chain smart-contract escrow) ───────────────────────
 	p2pRepository := p2pRepo.New(db)

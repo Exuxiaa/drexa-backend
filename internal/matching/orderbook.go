@@ -22,6 +22,10 @@ type OrderBook struct {
 
 	orders map[string]*Order // id -> resting order, for O(1) cancel
 	seq    uint64
+	// version counts mutations to the book (any Place or Cancel). It drives
+	// the depth feed: consumers skip publishing a book whose version is
+	// unchanged and detect dropped updates via gaps.
+	version uint64
 }
 
 // NewOrderBook returns an empty book.

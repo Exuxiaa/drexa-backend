@@ -49,14 +49,13 @@ func (e *Engine) Cancel(pairID, orderID string) (*Order, error) {
 	return b.Cancel(orderID)
 }
 
-// Snapshot returns a depth view of the given pair's book, best price first on
-// each side, capped to depth levels per side (depth <= 0 returns all levels).
-// A pair with no resting orders yields an empty snapshot.
-func (e *Engine) Snapshot(pairID string, depth int) BookSnapshot {
+// Depth returns a snapshot of up to maxLevels aggregated levels per side for a
+// pair, in tick/lot integers. maxLevels <= 0 returns every level.
+func (e *Engine) Depth(pairID string, maxLevels int) Depth {
 	b := e.book(pairID)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.snapshot(depth)
+	return b.Snapshot(maxLevels)
 }
 
 // BestBidAsk returns the best bid and ask tick prices for a pair. ok is false

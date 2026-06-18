@@ -114,7 +114,7 @@ func HandleOrderBook(orderSvc Service) http.Handler {
 			depth = 500
 		}
 
-		ob, err := orderSvc.GetOrderBook(r.Context(), pairID, depth)
+		ob, err := orderSvc.OrderBookDepth(r.Context(), pairID, depth)
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrPairNotFound):
