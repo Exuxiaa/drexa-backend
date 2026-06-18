@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"drexa/internal/auth"
 )
@@ -29,6 +30,16 @@ type InitiateDepositResponse struct {
 	ProviderRef string `json:"provider_ref"`
 	ExpiresAt   string `json:"expires_at"`
 	Message     string `json:"message"`
+}
+
+type DepositIntentHTTPRequest struct {
+	Amount   int64  `json:"amount"`   // in smallest unit (cents); e.g. $5.00 = 500
+	Currency string `json:"currency"` // optional — defaults to USD
+}
+
+type DepositIntentResponse struct {
+	ClientSecret string `json:"client_secret"` // handed to Stripe Elements on the frontend
+	TxID         string `json:"tx_id"`         // deposit record id, for client-side reference
 }
 
 type InitiateWithdrawalHTTPRequest struct {
@@ -70,6 +81,12 @@ func sendJSON(w http.ResponseWriter, status int, payload any) {
 
 func userFromCtx(r *http.Request) (*auth.JWTClaims, bool) {
 	return auth.UserFromContext(r.Context())
+}
+
+// normalizeCurrency upper-cases and trims a currency code from client input so that, e.g.,
+// "usd" from the URL path matches the canonical "USD" stored on the wallet.
+func normalizeCurrency(s string) CurrencyCode {
+	return CurrencyCode(strings.ToUpper(strings.TrimSpace(s)))
 }
 
 // ─── User-Facing Wallet Handlers ─────────────────────────────────────────────
@@ -114,7 +131,7 @@ func HandleGetBalance(uc WalletUsecase) http.HandlerFunc {
 			return
 		}
 
-		currency := CurrencyCode(r.PathValue("currency"))
+		currency := normalizeCurrency(r.PathValue("currency"))
 		if currency == "" {
 			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "currency is required"})
 			return
@@ -122,7 +139,12 @@ func HandleGetBalance(uc WalletUsecase) http.HandlerFunc {
 
 		wlt, err := uc.GetBalance(r.Context(), claims.UserID, currency)
 		if err == ErrWalletNotFound {
-			sendJSON(w, http.StatusNotFound, MessageResponse{Error: "wallet not found"})
+			// A user who hasn't transacted in this currency yet simply has a zero balance —
+			// report that rather than a 404 so the wallet UI can render $0.00 cleanly.
+			sendJSON(w, http.StatusOK, BalanceResponse{
+				Currency: string(currency),
+				Status:   string(WalletStatusActive),
+			})
 			return
 		}
 		if err != nil {
@@ -162,7 +184,7 @@ func HandleInitiateDeposit(uc WalletUsecase) http.HandlerFunc {
 
 		depositReq, err := uc.InitiateDeposit(r.Context(), claims.UserID, &InitiateDepositRequest{
 			Amount:    req.Amount,
-			Currency:  CurrencyCode(req.Currency),
+			Currency:  normalizeCurrency(req.Currency),
 			UserEmail: claims.Email,
 		})
 		if err != nil {
@@ -182,6 +204,56 @@ func HandleInitiateDeposit(uc WalletUsecase) http.HandlerFunc {
 			ProviderRef: depositReq.ProviderRef,
 			ExpiresAt:   depositReq.ExpiresAt.Format("2006-01-02T15:04:05Z"),
 			Message:     "deposit session created",
+		})
+	}
+}
+
+// HandleCreateDepositIntent creates a Stripe PaymentIntent and returns its client secret.
+// The frontend's embedded Stripe Elements form completes the payment; the wallet is credited
+// later by the deposit webhook.
+func HandleCreateDepositIntent(uc WalletUsecase) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := userFromCtx(r)
+		if !ok {
+			sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: "unauthorized"})
+			return
+		}
+
+		var req DepositIntentHTTPRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "invalid input"})
+			return
+		}
+		if req.Amount <= 0 {
+			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "amount is required"})
+			return
+		}
+
+		currency := normalizeCurrency(req.Currency)
+		if currency == "" {
+			currency = CurrencyUSD
+		}
+
+		intent, err := uc.CreateDepositIntent(r.Context(), claims.UserID, &InitiateDepositRequest{
+			Amount:    req.Amount,
+			Currency:  currency,
+			UserEmail: claims.Email,
+		})
+		if err != nil {
+			switch err {
+			case ErrInvalidAmount:
+				sendJSON(w, http.StatusBadRequest, MessageResponse{Error: err.Error()})
+			case ErrWalletSuspended, ErrWalletClosed:
+				sendJSON(w, http.StatusForbidden, MessageResponse{Error: err.Error()})
+			default:
+				sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "deposit intent failed"})
+			}
+			return
+		}
+
+		sendJSON(w, http.StatusCreated, DepositIntentResponse{
+			ClientSecret: intent.ClientSecret,
+			TxID:         intent.DepositID,
 		})
 	}
 }
@@ -236,7 +308,7 @@ func HandleInitiateWithdrawal(uc WalletUsecase) http.HandlerFunc {
 
 		withdrawalReq, err := uc.InitiateWithdrawal(r.Context(), claims.UserID, &InitiateWithdrawalRequest{
 			Amount:        req.Amount,
-			Currency:      CurrencyCode(req.Currency),
+			Currency:      normalizeCurrency(req.Currency),
 			BankCode:      req.BankCode,
 			AccountNumber: req.AccountNumber,
 			AccountName:   req.AccountName,

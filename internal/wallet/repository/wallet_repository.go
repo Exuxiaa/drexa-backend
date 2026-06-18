@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"drexa/internal/wallet"
 )
@@ -21,29 +22,29 @@ func NewWalletRepository(db *gorm.DB) wallet.WalletRepository {
 }
 
 func (r *walletRepository) Create(ctx context.Context, w *wallet.Wallet) error {
-	return r.db.WithContext(ctx).Create(w).Error
+	return dbFromContext(ctx, r.db).Create(w).Error
 }
 
 func (r *walletRepository) Update(ctx context.Context, w *wallet.Wallet) error {
-	return r.db.WithContext(ctx).Save(w).Error
+	return dbFromContext(ctx, r.db).Save(w).Error
 }
 
 func (r *walletRepository) UpdateBalance(ctx context.Context, walletID string, newBalance int64) error {
-	return r.db.WithContext(ctx).
+	return dbFromContext(ctx, r.db).
 		Model(&wallet.Wallet{}).
 		Where("wallet_id = ?", walletID).
 		Update("balance", newBalance).Error
 }
 
 func (r *walletRepository) UpdateLocked(ctx context.Context, walletID string, newLocked int64) error {
-	return r.db.WithContext(ctx).
+	return dbFromContext(ctx, r.db).
 		Model(&wallet.Wallet{}).
 		Where("wallet_id = ?", walletID).
 		Update("locked", newLocked).Error
 }
 
 func (r *walletRepository) UpdateStatus(ctx context.Context, walletID string, status wallet.WalletStatus) error {
-	return r.db.WithContext(ctx).
+	return dbFromContext(ctx, r.db).
 		Model(&wallet.Wallet{}).
 		Where("wallet_id = ?", walletID).
 		Update("status", status).Error
@@ -51,7 +52,19 @@ func (r *walletRepository) UpdateStatus(ctx context.Context, walletID string, st
 
 func (r *walletRepository) FindByID(ctx context.Context, walletID string) (*wallet.Wallet, error) {
 	var w wallet.Wallet
-	err := r.db.WithContext(ctx).Where("wallet_id = ?", walletID).First(&w).Error
+	err := dbFromContext(ctx, r.db).Where("wallet_id = ?", walletID).First(&w).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, wallet.ErrWalletNotFound
+	}
+	return &w, err
+}
+
+func (r *walletRepository) FindByIDForUpdate(ctx context.Context, walletID string) (*wallet.Wallet, error) {
+	var w wallet.Wallet
+	err := dbFromContext(ctx, r.db).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("wallet_id = ?", walletID).
+		First(&w).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, wallet.ErrWalletNotFound
 	}
@@ -60,13 +73,13 @@ func (r *walletRepository) FindByID(ctx context.Context, walletID string) (*wall
 
 func (r *walletRepository) FindByUserID(ctx context.Context, userID string) ([]wallet.Wallet, error) {
 	var wallets []wallet.Wallet
-	err := r.db.WithContext(ctx).Where("user_id = ?", userID).Find(&wallets).Error
+	err := dbFromContext(ctx, r.db).Where("user_id = ?", userID).Find(&wallets).Error
 	return wallets, err
 }
 
 func (r *walletRepository) FindByUserAndCurrency(ctx context.Context, userID string, currency wallet.CurrencyCode) (*wallet.Wallet, error) {
 	var w wallet.Wallet
-	err := r.db.WithContext(ctx).
+	err := dbFromContext(ctx, r.db).
 		Where("user_id = ? AND currency = ?", userID, currency).
 		First(&w).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -86,12 +99,12 @@ func NewTransactionRepository(db *gorm.DB) wallet.TransactionRepository {
 }
 
 func (r *transactionRepository) Create(ctx context.Context, tx *wallet.Transaction) error {
-	return r.db.WithContext(ctx).Create(tx).Error
+	return dbFromContext(ctx, r.db).Create(tx).Error
 }
 
 func (r *transactionRepository) FindByID(ctx context.Context, txID string) (*wallet.Transaction, error) {
 	var tx wallet.Transaction
-	err := r.db.WithContext(ctx).Where("tx_id = ?", txID).First(&tx).Error
+	err := dbFromContext(ctx, r.db).Where("tx_id = ?", txID).First(&tx).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, wallet.ErrTransactionNotFound
 	}
@@ -100,7 +113,7 @@ func (r *transactionRepository) FindByID(ctx context.Context, txID string) (*wal
 
 func (r *transactionRepository) FindByWalletID(ctx context.Context, walletID string, limit, offset int) ([]wallet.Transaction, error) {
 	var txs []wallet.Transaction
-	err := r.db.WithContext(ctx).
+	err := dbFromContext(ctx, r.db).
 		Where("wallet_id = ?", walletID).
 		Order("created_at DESC").
 		Limit(limit).Offset(offset).
@@ -110,7 +123,7 @@ func (r *transactionRepository) FindByWalletID(ctx context.Context, walletID str
 
 func (r *transactionRepository) FindByUserID(ctx context.Context, userID string, limit, offset int) ([]wallet.Transaction, error) {
 	var txs []wallet.Transaction
-	err := r.db.WithContext(ctx).
+	err := dbFromContext(ctx, r.db).
 		Where("user_id = ?", userID).
 		Order("created_at DESC").
 		Limit(limit).Offset(offset).
@@ -120,7 +133,7 @@ func (r *transactionRepository) FindByUserID(ctx context.Context, userID string,
 
 func (r *transactionRepository) FindByRefID(ctx context.Context, refID string) (*wallet.Transaction, error) {
 	var tx wallet.Transaction
-	err := r.db.WithContext(ctx).Where("ref_id = ?", refID).First(&tx).Error
+	err := dbFromContext(ctx, r.db).Where("ref_id = ?", refID).First(&tx).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, wallet.ErrTransactionNotFound
 	}
@@ -138,7 +151,7 @@ func NewDepositRepository(db *gorm.DB) wallet.DepositRepository {
 }
 
 func (r *depositRepository) Create(ctx context.Context, req *wallet.DepositRequest) error {
-	return r.db.WithContext(ctx).Create(req).Error
+	return dbFromContext(ctx, r.db).Create(req).Error
 }
 
 func (r *depositRepository) UpdateStatus(ctx context.Context, depositID string, status wallet.TransactionStatus, confirmedAt *time.Time) error {
@@ -146,7 +159,7 @@ func (r *depositRepository) UpdateStatus(ctx context.Context, depositID string, 
 	if confirmedAt != nil {
 		updates["confirmed_at"] = confirmedAt
 	}
-	return r.db.WithContext(ctx).
+	return dbFromContext(ctx, r.db).
 		Model(&wallet.DepositRequest{}).
 		Where("deposit_id = ?", depositID).
 		Updates(updates).Error
@@ -154,7 +167,7 @@ func (r *depositRepository) UpdateStatus(ctx context.Context, depositID string, 
 
 func (r *depositRepository) FindByID(ctx context.Context, depositID string) (*wallet.DepositRequest, error) {
 	var req wallet.DepositRequest
-	err := r.db.WithContext(ctx).Where("deposit_id = ?", depositID).First(&req).Error
+	err := dbFromContext(ctx, r.db).Where("deposit_id = ?", depositID).First(&req).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, wallet.ErrDepositNotFound
 	}
@@ -163,7 +176,7 @@ func (r *depositRepository) FindByID(ctx context.Context, depositID string) (*wa
 
 func (r *depositRepository) FindByProviderRef(ctx context.Context, providerRef string) (*wallet.DepositRequest, error) {
 	var req wallet.DepositRequest
-	err := r.db.WithContext(ctx).Where("provider_ref = ?", providerRef).First(&req).Error
+	err := dbFromContext(ctx, r.db).Where("provider_ref = ?", providerRef).First(&req).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, wallet.ErrDepositNotFound
 	}
@@ -172,7 +185,7 @@ func (r *depositRepository) FindByProviderRef(ctx context.Context, providerRef s
 
 func (r *depositRepository) FindByUserID(ctx context.Context, userID string, limit, offset int) ([]wallet.DepositRequest, error) {
 	var reqs []wallet.DepositRequest
-	err := r.db.WithContext(ctx).
+	err := dbFromContext(ctx, r.db).
 		Where("user_id = ?", userID).
 		Order("created_at DESC").
 		Limit(limit).Offset(offset).
@@ -191,11 +204,11 @@ func NewWithdrawalRepository(db *gorm.DB) wallet.WithdrawalRepository {
 }
 
 func (r *withdrawalRepository) Create(ctx context.Context, req *wallet.WithdrawalRequest) error {
-	return r.db.WithContext(ctx).Create(req).Error
+	return dbFromContext(ctx, r.db).Create(req).Error
 }
 
 func (r *withdrawalRepository) UpdateStatus(ctx context.Context, withdrawalID string, status wallet.TransactionStatus, providerRef, rejectionReason string) error {
-	return r.db.WithContext(ctx).
+	return dbFromContext(ctx, r.db).
 		Model(&wallet.WithdrawalRequest{}).
 		Where("withdrawal_id = ?", withdrawalID).
 		Updates(map[string]any{
@@ -207,7 +220,7 @@ func (r *withdrawalRepository) UpdateStatus(ctx context.Context, withdrawalID st
 
 func (r *withdrawalRepository) FindByID(ctx context.Context, withdrawalID string) (*wallet.WithdrawalRequest, error) {
 	var req wallet.WithdrawalRequest
-	err := r.db.WithContext(ctx).Where("withdrawal_id = ?", withdrawalID).First(&req).Error
+	err := dbFromContext(ctx, r.db).Where("withdrawal_id = ?", withdrawalID).First(&req).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, wallet.ErrWithdrawalNotFound
 	}
@@ -216,7 +229,7 @@ func (r *withdrawalRepository) FindByID(ctx context.Context, withdrawalID string
 
 func (r *withdrawalRepository) FindByUserID(ctx context.Context, userID string, limit, offset int) ([]wallet.WithdrawalRequest, error) {
 	var reqs []wallet.WithdrawalRequest
-	err := r.db.WithContext(ctx).
+	err := dbFromContext(ctx, r.db).
 		Where("user_id = ?", userID).
 		Order("created_at DESC").
 		Limit(limit).Offset(offset).
@@ -226,7 +239,7 @@ func (r *withdrawalRepository) FindByUserID(ctx context.Context, userID string, 
 
 func (r *withdrawalRepository) FindPendingByWalletID(ctx context.Context, walletID string) (*wallet.WithdrawalRequest, error) {
 	var req wallet.WithdrawalRequest
-	err := r.db.WithContext(ctx).
+	err := dbFromContext(ctx, r.db).
 		Where("wallet_id = ? AND status = ?", walletID, wallet.TxStatusPending).
 		First(&req).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {

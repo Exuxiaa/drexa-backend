@@ -36,10 +36,14 @@ func (r *userRepository) FindByID(ctx context.Context, userID string) (*auth.Use
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, auth.ErrUserNotFound
 	}
+<<<<<<< HEAD
 	if err != nil {
 		return nil, fmt.Errorf("user_repo: find by id: %w", err)
 	}
 	return &u, nil
+=======
+	return &user, nil
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 }
 
 func (r *userRepository) FindByEmail(ctx context.Context, email string) (*auth.User, error) {

@@ -39,6 +39,7 @@ func NewAuthUsecase(
 	}
 }
 
+<<<<<<< HEAD
 func (uc *authUsecase) Register(ctx context.Context, email, phone, pw string) (*auth.User, error) {
 	if _, err := uc.userRepo.FindByEmail(ctx, email); err == nil {
 		return nil, auth.ErrEmailAlreadyExists
@@ -50,11 +51,35 @@ func (uc *authUsecase) Register(ctx context.Context, email, phone, pw string) (*
 	hash, err := password.Hash(pw)
 	if err != nil {
 		return nil, fmt.Errorf("register: hash password: %w", err)
+=======
+var emailRegexp = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+// Register creates a new user with an email + password and issues a token pair.
+func (uc *authUsecase) Register(ctx context.Context, email, password, username string) (*auth.AuthToken, error) {
+	if !emailRegexp.MatchString(email) {
+		return nil, errors.New("invalid email address")
+	}
+	if len(password) < 8 {
+		return nil, errors.New("password must be at least 8 characters")
+	}
+
+	// Reject duplicate emails before attempting to create.
+	if _, err := uc.userRepo.FindByEmail(ctx, email); err == nil {
+		return nil, auth.ErrEmailAlreadyExists
+	} else if !errors.Is(err, auth.ErrUserNotFound) {
+		return nil, err
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, errors.New("failed to hash password")
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 	}
 
 	user := &auth.User{
 		UserID:       uuid.NewString(),
 		Email:        email,
+<<<<<<< HEAD
 		Phone:        phone,
 		PasswordHash: hash,
 		Role:         auth.RoleUser,
@@ -84,6 +109,33 @@ func (uc *authUsecase) Login(ctx context.Context, email, pw string) (*auth.AuthT
 			return nil, fmt.Errorf("login: generate 2fa challenge: %w", err)
 		}
 		return &auth.AuthToken{RequiresTwoFA: true, ChallengeToken: challengeToken}, nil
+=======
+		UserName:     username,
+		PasswordHash: string(hash),
+		LastLoginAt:  time.Now(),
+	}
+	if err := uc.userRepo.Create(ctx, user); err != nil {
+		return nil, errors.New("failed to create user")
+	}
+
+	return uc.issueTokenPair(ctx, user)
+}
+
+// Login verifies the email + password and issues a token pair.
+// It returns ErrInvalidCredentials for both unknown email and wrong password
+// so the response does not reveal which one was incorrect.
+func (uc *authUsecase) Login(ctx context.Context, email, password string) (*auth.AuthToken, error) {
+	user, err := uc.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			return nil, auth.ErrInvalidCredentials
+		}
+		return nil, err
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return nil, auth.ErrInvalidCredentials
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 	}
 
 	return uc.issueTokenPair(ctx, user)

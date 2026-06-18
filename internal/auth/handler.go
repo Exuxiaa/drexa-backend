@@ -2,6 +2,11 @@ package auth
 
 import (
 	"encoding/json"
+<<<<<<< HEAD
+=======
+	"errors"
+	"log"
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 	"net/http"
 )
 
@@ -9,7 +14,16 @@ import (
 
 type RegisterRequest struct {
 	Email    string `json:"email"`
+<<<<<<< HEAD
 	Phone    string `json:"phone"`
+=======
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 	Password string `json:"password"`
 }
 
@@ -62,7 +76,12 @@ func clearAuthCookies(w http.ResponseWriter) {
 
 // ─── Public Auth Handlers ─────────────────────────────────────────────────────
 
+<<<<<<< HEAD
 func HandleRegister(u AuthUsecase) http.HandlerFunc {
+=======
+// HandleRegister creates a new account with email + password and issues JWT cookies.
+func HandleRegister(u AuthUsecase, secureCookies bool) http.HandlerFunc {
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req RegisterRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -70,6 +89,7 @@ func HandleRegister(u AuthUsecase) http.HandlerFunc {
 			return
 		}
 
+<<<<<<< HEAD
 		user, err := u.Register(r.Context(), req.Email, req.Phone, req.Password)
 		if err != nil {
 			switch err {
@@ -110,6 +130,44 @@ func HandleLogin(u AuthUsecase) http.HandlerFunc {
 		}
 
 		setAuthCookies(w, token.AccessToken, token.RefreshToken)
+=======
+		token, err := u.Register(r.Context(), req.Email, req.Password, req.Username)
+		if err != nil {
+			switch {
+			case errors.Is(err, ErrEmailAlreadyExists):
+				sendJSON(w, http.StatusConflict, MessageResponse{Error: "email already registered"})
+			default:
+				sendJSON(w, http.StatusBadRequest, MessageResponse{Error: err.Error()})
+			}
+			return
+		}
+
+		setAuthCookies(w, token.AccessToken, token.RefreshToken, secureCookies)
+		sendJSON(w, http.StatusCreated, MessageResponse{Message: "registration successful"})
+	}
+}
+
+// HandleLogin verifies email + password and issues JWT cookies.
+func HandleLogin(u AuthUsecase, secureCookies bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req LoginRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "invalid input"})
+			return
+		}
+
+		token, err := u.Login(r.Context(), req.Email, req.Password)
+		if err != nil {
+			if errors.Is(err, ErrInvalidCredentials) {
+				sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: "invalid email or password"})
+				return
+			}
+			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "login failed"})
+			return
+		}
+
+		setAuthCookies(w, token.AccessToken, token.RefreshToken, secureCookies)
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 		sendJSON(w, http.StatusOK, MessageResponse{Message: "login successful"})
 	}
 }

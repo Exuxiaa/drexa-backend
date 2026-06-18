@@ -11,11 +11,12 @@ import (
 )
 
 type walletUsecase struct {
-	walletRepo  wallet.WalletRepository
-	txRepo      wallet.TransactionRepository
-	depositRepo wallet.DepositRepository
+	walletRepo     wallet.WalletRepository
+	txRepo         wallet.TransactionRepository
+	depositRepo    wallet.DepositRepository
 	withdrawalRepo wallet.WithdrawalRepository
-	paymentSvc  wallet.PaymentService
+	paymentSvc     wallet.PaymentService
+	tx             wallet.TxManager
 }
 
 func NewWalletUsecase(
@@ -24,6 +25,7 @@ func NewWalletUsecase(
 	depositRepo wallet.DepositRepository,
 	withdrawalRepo wallet.WithdrawalRepository,
 	paymentSvc wallet.PaymentService,
+	tx wallet.TxManager,
 ) wallet.WalletUsecase {
 	return &walletUsecase{
 		walletRepo:     walletRepo,
@@ -31,6 +33,21 @@ func NewWalletUsecase(
 		depositRepo:    depositRepo,
 		withdrawalRepo: withdrawalRepo,
 		paymentSvc:     paymentSvc,
+		tx:             tx,
+	}
+}
+
+// minWithdrawalFor returns the minimum withdrawable amount, in the currency's smallest unit.
+// Fiat floors mirror the frontend's $10 minimum; currencies without an explicit floor only
+// require a positive amount.
+func minWithdrawalFor(c wallet.CurrencyCode) int64 {
+	switch c {
+	case wallet.CurrencyUSD:
+		return 1_000 // $10.00 (cents)
+	case wallet.CurrencyIDR:
+		return 50_000 // Rp50,000
+	default:
+		return 0
 	}
 }
 
@@ -116,6 +133,46 @@ func (uc *walletUsecase) InitiateDeposit(ctx context.Context, userID string, req
 	return depositReq, nil
 }
 
+// CreateDepositIntent creates a PaymentIntent and persists a pending DepositRequest keyed by the
+// intent's provider reference. The wallet is credited later by ConfirmDeposit via webhook.
+func (uc *walletUsecase) CreateDepositIntent(ctx context.Context, userID string, req *wallet.InitiateDepositRequest) (*wallet.DepositIntent, error) {
+	if req.Amount <= 0 {
+		return nil, wallet.ErrInvalidAmount
+	}
+
+	w, err := uc.GetOrCreate(ctx, userID, req.Currency)
+	if err != nil {
+		return nil, err
+	}
+	if w.Status != wallet.WalletStatusActive {
+		return nil, wallet.ErrWalletSuspended
+	}
+
+	depositID := uuid.New().String()
+
+	clientSecret, providerRef, err := uc.paymentSvc.CreatePaymentIntent(ctx, depositID, req.Amount, req.Currency, req.UserEmail)
+	if err != nil {
+		return nil, fmt.Errorf("create payment intent: %w", err)
+	}
+
+	depositReq := &wallet.DepositRequest{
+		DepositID:   depositID,
+		UserID:      userID,
+		WalletID:    w.WalletID,
+		Amount:      req.Amount,
+		Currency:    req.Currency,
+		Provider:    "stripe",
+		ProviderRef: providerRef,
+		Status:      wallet.TxStatusPending,
+		ExpiresAt:   time.Now().Add(30 * time.Minute),
+	}
+	if err := uc.depositRepo.Create(ctx, depositReq); err != nil {
+		return nil, fmt.Errorf("save deposit request: %w", err)
+	}
+
+	return &wallet.DepositIntent{DepositID: depositID, ClientSecret: clientSecret}, nil
+}
+
 // ConfirmDeposit is called by the payment provider webhook after successful payment.
 // It credits the wallet and records the transaction atomically.
 func (uc *walletUsecase) ConfirmDeposit(ctx context.Context, providerRef string) error {
@@ -131,78 +188,59 @@ func (uc *walletUsecase) ConfirmDeposit(ctx context.Context, providerRef string)
 		return wallet.ErrDepositExpired
 	}
 
-	w, err := uc.walletRepo.FindByID(ctx, depositReq.WalletID)
-	if err != nil {
-		return err
-	}
+	// Credit the wallet, record the transaction, and mark the deposit confirmed atomically.
+	// The row is locked FOR UPDATE so concurrent webhook retries can't double-credit.
+	return uc.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := uc.walletRepo.FindByIDForUpdate(ctx, depositReq.WalletID)
+		if err != nil {
+			return err
+		}
 
-	balanceBefore := w.Balance
-	newBalance := w.Balance + depositReq.Amount
+		balanceBefore := w.Balance
+		newBalance := w.Balance + depositReq.Amount
 
-	// Update wallet balance
-	if err := uc.walletRepo.UpdateBalance(ctx, w.WalletID, newBalance); err != nil {
-		return fmt.Errorf("update balance: %w", err)
-	}
+		if err := uc.walletRepo.UpdateBalance(ctx, w.WalletID, newBalance); err != nil {
+			return fmt.Errorf("update balance: %w", err)
+		}
 
-	// Record transaction (immutable audit log)
-	now := time.Now()
-	tx := &wallet.Transaction{
-		TxID:          uuid.New().String(),
-		WalletID:      w.WalletID,
-		UserID:        depositReq.UserID,
-		Type:          wallet.TxTypeDeposit,
-		Status:        wallet.TxStatusCompleted,
-		Amount:        depositReq.Amount,
-		BalanceBefore: balanceBefore,
-		BalanceAfter:  newBalance,
-		Currency:      depositReq.Currency,
-		RefID:         depositReq.DepositID,
-		Description:   fmt.Sprintf("Deposit via %s", depositReq.Provider),
-	}
-	if err := uc.txRepo.Create(ctx, tx); err != nil {
-		return fmt.Errorf("record transaction: %w", err)
-	}
+		// Record transaction (immutable audit log)
+		now := time.Now()
+		tx := &wallet.Transaction{
+			TxID:          uuid.New().String(),
+			WalletID:      w.WalletID,
+			UserID:        depositReq.UserID,
+			Type:          wallet.TxTypeDeposit,
+			Status:        wallet.TxStatusCompleted,
+			Amount:        depositReq.Amount,
+			BalanceBefore: balanceBefore,
+			BalanceAfter:  newBalance,
+			Currency:      depositReq.Currency,
+			RefID:         depositReq.DepositID,
+			Description:   fmt.Sprintf("Deposit via %s", depositReq.Provider),
+		}
+		if err := uc.txRepo.Create(ctx, tx); err != nil {
+			return fmt.Errorf("record transaction: %w", err)
+		}
 
-	// Mark deposit as confirmed
-	return uc.depositRepo.UpdateStatus(ctx, depositReq.DepositID, wallet.TxStatusCompleted, &now)
+		// Mark deposit as confirmed
+		return uc.depositRepo.UpdateStatus(ctx, depositReq.DepositID, wallet.TxStatusCompleted, &now)
+	})
 }
 
 // InitiateWithdrawal deducts balance, locks it, and queues a withdrawal for admin approval.
 // Actual disbursement happens in AdminWalletUsecase.ApproveWithdrawal.
 func (uc *walletUsecase) InitiateWithdrawal(ctx context.Context, userID string, req *wallet.InitiateWithdrawalRequest) (*wallet.WithdrawalRequest, error) {
-	const minWithdrawal int64 = 50_000 // 50,000 IDR minimum
-
 	if req.Amount <= 0 {
 		return nil, wallet.ErrInvalidAmount
 	}
-	if req.Amount < minWithdrawal {
+	if req.Amount < minWithdrawalFor(req.Currency) {
 		return nil, wallet.ErrWithdrawalAmountMin
 	}
 
+	// Resolve the wallet id outside the transaction; the balance decision happens under lock below.
 	w, err := uc.walletRepo.FindByUserAndCurrency(ctx, userID, req.Currency)
 	if err != nil {
 		return nil, err
-	}
-	if w.Status != wallet.WalletStatusActive {
-		return nil, wallet.ErrWalletSuspended
-	}
-
-	// Guard: only one pending withdrawal per wallet
-	existing, err := uc.withdrawalRepo.FindPendingByWalletID(ctx, w.WalletID)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		return nil, wallet.ErrWithdrawalPending
-	}
-
-	if w.Available() < req.Amount {
-		return nil, wallet.ErrInsufficientBalance
-	}
-
-	// Lock the amount so it can't be double-spent
-	if err := uc.walletRepo.UpdateLocked(ctx, w.WalletID, w.Locked+req.Amount); err != nil {
-		return nil, fmt.Errorf("lock balance: %w", err)
 	}
 
 	withdrawalReq := &wallet.WithdrawalRequest{
@@ -217,10 +255,40 @@ func (uc *walletUsecase) InitiateWithdrawal(ctx context.Context, userID string, 
 		Status:        wallet.TxStatusPending,
 	}
 
-	if err := uc.withdrawalRepo.Create(ctx, withdrawalReq); err != nil {
-		// Roll back lock on failure
-		_ = uc.walletRepo.UpdateLocked(ctx, w.WalletID, w.Locked)
-		return nil, fmt.Errorf("create withdrawal: %w", err)
+	// Lock the row, re-check the guard and balance against fresh values, then reserve the funds
+	// and create the request atomically. A failed Create rolls the lock back automatically.
+	err = uc.tx.Do(ctx, func(ctx context.Context) error {
+		locked, err := uc.walletRepo.FindByIDForUpdate(ctx, w.WalletID)
+		if err != nil {
+			return err
+		}
+		if locked.Status != wallet.WalletStatusActive {
+			return wallet.ErrWalletSuspended
+		}
+
+		// Guard: only one pending withdrawal per wallet
+		existing, err := uc.withdrawalRepo.FindPendingByWalletID(ctx, locked.WalletID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			return wallet.ErrWithdrawalPending
+		}
+
+		if locked.Available() < req.Amount {
+			return wallet.ErrInsufficientBalance
+		}
+
+		if err := uc.walletRepo.UpdateLocked(ctx, locked.WalletID, locked.Locked+req.Amount); err != nil {
+			return fmt.Errorf("lock balance: %w", err)
+		}
+		if err := uc.withdrawalRepo.Create(ctx, withdrawalReq); err != nil {
+			return fmt.Errorf("create withdrawal: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return withdrawalReq, nil
@@ -245,6 +313,7 @@ type adminWalletUsecase struct {
 	txRepo         wallet.TransactionRepository
 	withdrawalRepo wallet.WithdrawalRepository
 	paymentSvc     wallet.PaymentService
+	tx             wallet.TxManager
 }
 
 func NewAdminWalletUsecase(
@@ -252,12 +321,14 @@ func NewAdminWalletUsecase(
 	txRepo wallet.TransactionRepository,
 	withdrawalRepo wallet.WithdrawalRepository,
 	paymentSvc wallet.PaymentService,
+	tx wallet.TxManager,
 ) wallet.AdminWalletUsecase {
 	return &adminWalletUsecase{
 		walletRepo:     walletRepo,
 		txRepo:         txRepo,
 		withdrawalRepo: withdrawalRepo,
 		paymentSvc:     paymentSvc,
+		tx:             tx,
 	}
 }
 
@@ -265,29 +336,32 @@ func (uc *adminWalletUsecase) Credit(ctx context.Context, walletID string, amoun
 	if amount <= 0 {
 		return wallet.ErrInvalidAmount
 	}
-	w, err := uc.walletRepo.FindByID(ctx, walletID)
-	if err != nil {
-		return err
-	}
 
-	balanceBefore := w.Balance
-	newBalance := w.Balance + amount
+	return uc.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := uc.walletRepo.FindByIDForUpdate(ctx, walletID)
+		if err != nil {
+			return err
+		}
 
-	if err := uc.walletRepo.UpdateBalance(ctx, walletID, newBalance); err != nil {
-		return err
-	}
+		balanceBefore := w.Balance
+		newBalance := w.Balance + amount
 
-	return uc.txRepo.Create(ctx, &wallet.Transaction{
-		TxID:          uuid.New().String(),
-		WalletID:      walletID,
-		UserID:        w.UserID,
-		Type:          wallet.TxTypeDeposit,
-		Status:        wallet.TxStatusCompleted,
-		Amount:        amount,
-		BalanceBefore: balanceBefore,
-		BalanceAfter:  newBalance,
-		Currency:      w.Currency,
-		Description:   fmt.Sprintf("[Admin:%s] %s", adminID, description),
+		if err := uc.walletRepo.UpdateBalance(ctx, walletID, newBalance); err != nil {
+			return err
+		}
+
+		return uc.txRepo.Create(ctx, &wallet.Transaction{
+			TxID:          uuid.New().String(),
+			WalletID:      walletID,
+			UserID:        w.UserID,
+			Type:          wallet.TxTypeDeposit,
+			Status:        wallet.TxStatusCompleted,
+			Amount:        amount,
+			BalanceBefore: balanceBefore,
+			BalanceAfter:  newBalance,
+			Currency:      w.Currency,
+			Description:   fmt.Sprintf("[Admin:%s] %s", adminID, description),
+		})
 	})
 }
 
@@ -295,32 +369,35 @@ func (uc *adminWalletUsecase) Debit(ctx context.Context, walletID string, amount
 	if amount <= 0 {
 		return wallet.ErrInvalidAmount
 	}
-	w, err := uc.walletRepo.FindByID(ctx, walletID)
-	if err != nil {
-		return err
-	}
-	if w.Available() < amount {
-		return wallet.ErrInsufficientBalance
-	}
 
-	balanceBefore := w.Balance
-	newBalance := w.Balance - amount
+	return uc.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := uc.walletRepo.FindByIDForUpdate(ctx, walletID)
+		if err != nil {
+			return err
+		}
+		if w.Available() < amount {
+			return wallet.ErrInsufficientBalance
+		}
 
-	if err := uc.walletRepo.UpdateBalance(ctx, walletID, newBalance); err != nil {
-		return err
-	}
+		balanceBefore := w.Balance
+		newBalance := w.Balance - amount
 
-	return uc.txRepo.Create(ctx, &wallet.Transaction{
-		TxID:          uuid.New().String(),
-		WalletID:      walletID,
-		UserID:        w.UserID,
-		Type:          wallet.TxTypeWithdrawal,
-		Status:        wallet.TxStatusCompleted,
-		Amount:        amount,
-		BalanceBefore: balanceBefore,
-		BalanceAfter:  newBalance,
-		Currency:      w.Currency,
-		Description:   fmt.Sprintf("[Admin:%s] %s", adminID, description),
+		if err := uc.walletRepo.UpdateBalance(ctx, walletID, newBalance); err != nil {
+			return err
+		}
+
+		return uc.txRepo.Create(ctx, &wallet.Transaction{
+			TxID:          uuid.New().String(),
+			WalletID:      walletID,
+			UserID:        w.UserID,
+			Type:          wallet.TxTypeWithdrawal,
+			Status:        wallet.TxStatusCompleted,
+			Amount:        amount,
+			BalanceBefore: balanceBefore,
+			BalanceAfter:  newBalance,
+			Currency:      w.Currency,
+			Description:   fmt.Sprintf("[Admin:%s] %s", adminID, description),
+		})
 	})
 }
 
@@ -338,7 +415,8 @@ func (uc *adminWalletUsecase) ApproveWithdrawal(ctx context.Context, withdrawalI
 		return fmt.Errorf("withdrawal is not in pending state")
 	}
 
-	// Disburse via payment provider
+	// Disburse via payment provider. This is an external, non-reversible side-effect, so it stays
+	// outside the DB transaction — we don't want to hold a row lock across a network call.
 	providerRef, err := uc.paymentSvc.CreateDisbursement(ctx, &wallet.DisbursementRequest{
 		WithdrawalID:  wr.WithdrawalID,
 		Amount:        wr.Amount,
@@ -351,42 +429,42 @@ func (uc *adminWalletUsecase) ApproveWithdrawal(ctx context.Context, withdrawalI
 		return fmt.Errorf("disburse: %w", err)
 	}
 
-	// Deduct balance and release lock
-	w, err := uc.walletRepo.FindByID(ctx, wr.WalletID)
-	if err != nil {
-		return err
-	}
-	balanceBefore := w.Balance
-	newBalance := w.Balance - wr.Amount
-	newLocked := w.Locked - wr.Amount
+	// Settle the ledger atomically: deduct balance, release the lock, record the transaction,
+	// and mark the withdrawal completed — all or nothing.
+	return uc.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := uc.walletRepo.FindByIDForUpdate(ctx, wr.WalletID)
+		if err != nil {
+			return err
+		}
+		balanceBefore := w.Balance
+		newBalance := w.Balance - wr.Amount
+		newLocked := w.Locked - wr.Amount
 
-	if err := uc.walletRepo.UpdateBalance(ctx, w.WalletID, newBalance); err != nil {
-		return err
-	}
-	if err := uc.walletRepo.UpdateLocked(ctx, w.WalletID, newLocked); err != nil {
-		return err
-	}
+		if err := uc.walletRepo.UpdateBalance(ctx, w.WalletID, newBalance); err != nil {
+			return err
+		}
+		if err := uc.walletRepo.UpdateLocked(ctx, w.WalletID, newLocked); err != nil {
+			return err
+		}
 
-	// Record immutable transaction
-	now := time.Now()
-	_ = now
-	if err := uc.txRepo.Create(ctx, &wallet.Transaction{
-		TxID:          uuid.New().String(),
-		WalletID:      w.WalletID,
-		UserID:        wr.UserID,
-		Type:          wallet.TxTypeWithdrawal,
-		Status:        wallet.TxStatusCompleted,
-		Amount:        wr.Amount,
-		BalanceBefore: balanceBefore,
-		BalanceAfter:  newBalance,
-		Currency:      wr.Currency,
-		RefID:         wr.WithdrawalID,
-		Description:   fmt.Sprintf("Withdrawal to %s %s approved by admin %s", wr.BankCode, wr.AccountNumber, adminID),
-	}); err != nil {
-		return err
-	}
+		if err := uc.txRepo.Create(ctx, &wallet.Transaction{
+			TxID:          uuid.New().String(),
+			WalletID:      w.WalletID,
+			UserID:        wr.UserID,
+			Type:          wallet.TxTypeWithdrawal,
+			Status:        wallet.TxStatusCompleted,
+			Amount:        wr.Amount,
+			BalanceBefore: balanceBefore,
+			BalanceAfter:  newBalance,
+			Currency:      wr.Currency,
+			RefID:         wr.WithdrawalID,
+			Description:   fmt.Sprintf("Withdrawal to %s %s approved by admin %s", wr.BankCode, wr.AccountNumber, adminID),
+		}); err != nil {
+			return err
+		}
 
-	return uc.withdrawalRepo.UpdateStatus(ctx, withdrawalID, wallet.TxStatusCompleted, providerRef, "")
+		return uc.withdrawalRepo.UpdateStatus(ctx, withdrawalID, wallet.TxStatusCompleted, providerRef, "")
+	})
 }
 
 func (uc *adminWalletUsecase) RejectWithdrawal(ctx context.Context, withdrawalID, adminID, reason string) error {
@@ -398,14 +476,15 @@ func (uc *adminWalletUsecase) RejectWithdrawal(ctx context.Context, withdrawalID
 		return fmt.Errorf("withdrawal is not in pending state")
 	}
 
-	// Release the locked amount back to available
-	w, err := uc.walletRepo.FindByID(ctx, wr.WalletID)
-	if err != nil {
-		return err
-	}
-	if err := uc.walletRepo.UpdateLocked(ctx, w.WalletID, w.Locked-wr.Amount); err != nil {
-		return err
-	}
-
-	return uc.withdrawalRepo.UpdateStatus(ctx, withdrawalID, wallet.TxStatusFailed, "", reason)
+	// Release the locked amount back to available and mark the request failed atomically.
+	return uc.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := uc.walletRepo.FindByIDForUpdate(ctx, wr.WalletID)
+		if err != nil {
+			return err
+		}
+		if err := uc.walletRepo.UpdateLocked(ctx, w.WalletID, w.Locked-wr.Amount); err != nil {
+			return err
+		}
+		return uc.withdrawalRepo.UpdateStatus(ctx, withdrawalID, wallet.TxStatusFailed, "", reason)
+	})
 }

@@ -89,6 +89,7 @@ type Transaction struct {
 
 // DepositRequest tracks a pending fiat deposit before it is confirmed by the payment provider
 type DepositRequest struct {
+<<<<<<< HEAD
 	DepositID   string            `gorm:"primaryKey;column:deposit_id"`
 	UserID      string            `gorm:"column:user_id;index"`
 	WalletID    string            `gorm:"column:wallet_id;index"`
@@ -101,6 +102,20 @@ type DepositRequest struct {
 	ConfirmedAt *time.Time        `gorm:"column:confirmed_at"`
 	CreatedAt   time.Time         `gorm:"column:created_at;autoCreateTime"`
 	ModifiedAt  time.Time         `gorm:"column:modified_at;autoUpdateTime"`
+=======
+	DepositID       string    `gorm:"primaryKey;column:deposit_id"`
+	UserID          string    `gorm:"column:user_id;index"`
+	WalletID        string    `gorm:"column:wallet_id;index"`
+	Amount          int64     `gorm:"column:amount"`
+	Currency        CurrencyCode `gorm:"column:currency"`
+	Provider        string    `gorm:"column:provider"`                 // "stripe", "midtrans", etc.
+	ProviderRef     string    `gorm:"column:provider_ref;size:191;uniqueIndex"` // provider's payment/session ID
+	Status          TransactionStatus `gorm:"column:status;default:pending"`
+	ExpiresAt       time.Time `gorm:"column:expires_at"`
+	ConfirmedAt     *time.Time `gorm:"column:confirmed_at"`
+	CreatedAt       time.Time `gorm:"column:created_at;autoCreateTime"`
+	ModifiedAt      time.Time `gorm:"column:modified_at;autoUpdateTime"`
+>>>>>>> e448e44364a4225c0819ff59d6af60c71d778498
 }
 
 // WithdrawalRequest tracks a pending fiat withdrawal pending compliance review
@@ -119,6 +134,19 @@ type WithdrawalRequest struct {
 	ProcessedAt     *time.Time        `gorm:"column:processed_at"`
 	CreatedAt       time.Time         `gorm:"column:created_at;autoCreateTime"`
 	ModifiedAt      time.Time         `gorm:"column:modified_at;autoUpdateTime"`
+}
+
+// CryptoAddress is a user's on-chain deposit address for a given currency/chain,
+// derived from an HD wallet generated via the crypto provider (Tatum).
+type CryptoAddress struct {
+	ID              string       `gorm:"primaryKey;column:id;size:36"`
+	UserID          string       `gorm:"column:user_id;size:36;uniqueIndex:idx_crypto_user_currency"`
+	Currency        CurrencyCode `gorm:"column:currency;size:16;uniqueIndex:idx_crypto_user_currency"`
+	Chain           string       `gorm:"column:chain;size:32"`    // e.g. "bitcoin", "ethereum"
+	Address         string       `gorm:"column:address;size:128;index"`
+	Xpub            string       `gorm:"column:xpub;size:255"`    // extended public key (deposit-only; cannot spend)
+	DerivationIndex int          `gorm:"column:derivation_index"`
+	CreatedAt       time.Time    `gorm:"column:created_at;autoCreateTime"`
 }
 
 // ─── Domain Errors ───────────────────────────────────────────────────────────
@@ -144,4 +172,8 @@ var (
 
 	// Transaction
 	ErrTransactionNotFound = errors.New("transaction not found")
+
+	// Crypto
+	ErrUnsupportedCurrency    = errors.New("currency is not supported for on-chain operations")
+	ErrCryptoAddressNotFound  = errors.New("crypto address not found")
 )
