@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// ─── Entities ───────────────────────────────────────────────────────────────
+// ─── Enums ───────────────────────────────────────────────────────────────────
 
 // CurrencyCode is a defined type to prevent arbitrary string values
 type CurrencyCode string
@@ -49,16 +49,19 @@ const (
 	TxStatusReversed  TransactionStatus = "reversed"
 )
 
-// Wallet represents a user's balance account for a specific currency
+// ─── Entities ────────────────────────────────────────────────────────────────
+
+// Wallet represents a user's balance account for a specific currency.
+// Balance is stored in the smallest unit (cents for IDR, satoshi for BTC).
 type Wallet struct {
-	WalletID   string       `gorm:"primaryKey;column:wallet_id"`
-	UserID     string       `gorm:"column:user_id;index"`      // FK to users
-	Currency   CurrencyCode `gorm:"column:currency;index"`     // e.g. "IDR", "BTC"
-	Balance    int64        `gorm:"column:balance;default:0"`  // stored in smallest unit (cents/satoshi)
-	Locked     int64        `gorm:"column:locked;default:0"`   // amount reserved for open orders
-	Status     WalletStatus `gorm:"column:status;default:active"`
-	CreatedAt  time.Time    `gorm:"column:created_at;autoCreateTime"`
-	ModifiedAt time.Time    `gorm:"column:modified_at;autoUpdateTime"`
+	WalletID   string         `gorm:"primaryKey;column:wallet_id"`
+	UserID     string         `gorm:"column:user_id;index"`     // FK to users
+	Currency   CurrencyCode   `gorm:"column:currency;index"`    // e.g. "IDR", "BTC"
+	Balance    int64          `gorm:"column:balance;default:0"` // stored in smallest unit (cents/satoshi)
+	Locked     int64          `gorm:"column:locked;default:0"`  // amount reserved for open orders
+	Status     WalletStatus   `gorm:"column:status;default:active"`
+	CreatedAt  time.Time      `gorm:"column:created_at;autoCreateTime"`
+	ModifiedAt time.Time      `gorm:"column:modified_at;autoUpdateTime"`
 	DeletedAt  gorm.DeletedAt `gorm:"column:deleted_at;index"` // soft delete — OJK audit trail
 }
 
@@ -70,52 +73,65 @@ func (w *Wallet) Available() int64 {
 // Transaction records every balance movement for full audit trail (OJK requirement)
 type Transaction struct {
 	TxID          string            `gorm:"primaryKey;column:tx_id"`
-	WalletID      string            `gorm:"column:wallet_id;index"`        // FK to wallets
-	UserID        string            `gorm:"column:user_id;index"`          // denormalized for faster user history queries
+	WalletID      string            `gorm:"column:wallet_id;index"` // FK to wallets
+	UserID        string            `gorm:"column:user_id;index"`   // denormalized for faster user history queries
 	Type          TransactionType   `gorm:"column:type"`
 	Status        TransactionStatus `gorm:"column:status;default:pending"`
-	Amount        int64             `gorm:"column:amount"`                 // always positive; direction inferred from Type
+	Amount        int64             `gorm:"column:amount"` // always positive; direction inferred from Type
 	BalanceBefore int64             `gorm:"column:balance_before"`
 	BalanceAfter  int64             `gorm:"column:balance_after"`
 	Currency      CurrencyCode      `gorm:"column:currency"`
-	RefID         string            `gorm:"column:ref_id"`                 // external reference: Stripe payment ID, order ID, etc.
+	RefID         string            `gorm:"column:ref_id"`             // external reference: payment ID, order ID, etc.
 	Description   string            `gorm:"column:description"`
-	Metadata      string            `gorm:"column:metadata;type:text"`     // JSON blob for provider-specific data
+	Metadata      string            `gorm:"column:metadata;type:text"` // JSON blob for provider-specific data
 	CreatedAt     time.Time         `gorm:"column:created_at;autoCreateTime"`
 }
 
 // DepositRequest tracks a pending fiat deposit before it is confirmed by the payment provider
 type DepositRequest struct {
-	DepositID       string    `gorm:"primaryKey;column:deposit_id"`
-	UserID          string    `gorm:"column:user_id;index"`
-	WalletID        string    `gorm:"column:wallet_id;index"`
-	Amount          int64     `gorm:"column:amount"`
-	Currency        CurrencyCode `gorm:"column:currency"`
-	Provider        string    `gorm:"column:provider"`                 // "stripe", "midtrans", etc.
-	ProviderRef     string    `gorm:"column:provider_ref;uniqueIndex"` // provider's payment/session ID
-	Status          TransactionStatus `gorm:"column:status;default:pending"`
-	ExpiresAt       time.Time `gorm:"column:expires_at"`
-	ConfirmedAt     *time.Time `gorm:"column:confirmed_at"`
-	CreatedAt       time.Time `gorm:"column:created_at;autoCreateTime"`
-	ModifiedAt      time.Time `gorm:"column:modified_at;autoUpdateTime"`
+	DepositID   string            `gorm:"primaryKey;column:deposit_id"`
+	UserID      string            `gorm:"column:user_id;index"`
+	WalletID    string            `gorm:"column:wallet_id;index"`
+	Amount      int64             `gorm:"column:amount"`
+	Currency    CurrencyCode      `gorm:"column:currency"`
+	Provider    string            `gorm:"column:provider"`                 // "xendit", "midtrans", etc.
+	ProviderRef string            `gorm:"column:provider_ref;uniqueIndex"` // provider's payment/session ID
+	Status      TransactionStatus `gorm:"column:status;default:pending"`
+	ExpiresAt   time.Time         `gorm:"column:expires_at"`
+	ConfirmedAt *time.Time        `gorm:"column:confirmed_at"`
+	CreatedAt   time.Time         `gorm:"column:created_at;autoCreateTime"`
+	ModifiedAt  time.Time         `gorm:"column:modified_at;autoUpdateTime"`
 }
 
 // WithdrawalRequest tracks a pending fiat withdrawal pending compliance review
 type WithdrawalRequest struct {
-	WithdrawalID    string    `gorm:"primaryKey;column:withdrawal_id"`
-	UserID          string    `gorm:"column:user_id;index"`
-	WalletID        string    `gorm:"column:wallet_id;index"`
-	Amount          int64     `gorm:"column:amount"`
-	Currency        CurrencyCode `gorm:"column:currency"`
-	BankCode        string    `gorm:"column:bank_code"`           // e.g. "BCA", "BNI", "MANDIRI"
-	AccountNumber   string    `gorm:"column:account_number"`      // encrypted before storage
-	AccountName     string    `gorm:"column:account_name"`
+	WithdrawalID    string            `gorm:"primaryKey;column:withdrawal_id"`
+	UserID          string            `gorm:"column:user_id;index"`
+	WalletID        string            `gorm:"column:wallet_id;index"`
+	Amount          int64             `gorm:"column:amount"`
+	Currency        CurrencyCode      `gorm:"column:currency"`
+	BankCode        string            `gorm:"column:bank_code"`      // e.g. "BCA", "BNI", "MANDIRI"
+	AccountNumber   string            `gorm:"column:account_number"` // encrypted before storage
+	AccountName     string            `gorm:"column:account_name"`
 	Status          TransactionStatus `gorm:"column:status;default:pending"`
-	ProviderRef     string    `gorm:"column:provider_ref"`        // disbursement ID from provider
-	RejectionReason string    `gorm:"column:rejection_reason"`
-	ProcessedAt     *time.Time `gorm:"column:processed_at"`
-	CreatedAt       time.Time `gorm:"column:created_at;autoCreateTime"`
-	ModifiedAt      time.Time `gorm:"column:modified_at;autoUpdateTime"`
+	ProviderRef     string            `gorm:"column:provider_ref"` // disbursement ID from provider
+	RejectionReason string            `gorm:"column:rejection_reason"`
+	ProcessedAt     *time.Time        `gorm:"column:processed_at"`
+	CreatedAt       time.Time         `gorm:"column:created_at;autoCreateTime"`
+	ModifiedAt      time.Time         `gorm:"column:modified_at;autoUpdateTime"`
+}
+
+// CryptoAddress is a user's on-chain deposit address for a given currency/chain,
+// derived from an HD wallet generated via the crypto provider (Tatum).
+type CryptoAddress struct {
+	ID              string       `gorm:"primaryKey;column:id;size:36"`
+	UserID          string       `gorm:"column:user_id;size:36;uniqueIndex:idx_crypto_user_currency"`
+	Currency        CurrencyCode `gorm:"column:currency;size:16;uniqueIndex:idx_crypto_user_currency"`
+	Chain           string       `gorm:"column:chain;size:32"`    // e.g. "bitcoin", "ethereum"
+	Address         string       `gorm:"column:address;size:128;index"`
+	Xpub            string       `gorm:"column:xpub;size:255"`    // extended public key (deposit-only; cannot spend)
+	DerivationIndex int          `gorm:"column:derivation_index"`
+	CreatedAt       time.Time    `gorm:"column:created_at;autoCreateTime"`
 }
 
 // ─── Domain Errors ───────────────────────────────────────────────────────────
@@ -141,4 +157,8 @@ var (
 
 	// Transaction
 	ErrTransactionNotFound = errors.New("transaction not found")
+
+	// Crypto
+	ErrUnsupportedCurrency    = errors.New("currency is not supported for on-chain operations")
+	ErrCryptoAddressNotFound  = errors.New("crypto address not found")
 )

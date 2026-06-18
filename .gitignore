@@ -24,8 +24,9 @@ vendor/
 go.work
 go.work.sum
 
-# env file
+# secrets
 .env*
+**service-account.json
 
 # Visual Studio Code
 .vscode/*

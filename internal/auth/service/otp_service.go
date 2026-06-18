@@ -2,107 +2,95 @@ package service
 
 import (
 	"context"
-	"drexa/internal/auth"
-	"errors"
-	"log"
-	"sync"
+	"crypto/rand"
+	"fmt"
+	"math/big"
 	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
+	"drexa/internal/auth"
 )
 
-const (
-	mockOTPValue = "1234"
-	otpTTL       = 10 * time.Minute
-)
+const otpTTL = 10 * time.Minute
 
-type otpEntry struct {
-	otp       string
-	expiresAt time.Time
+type otpService struct {
+	otpRepo  auth.OTPRepository
+	emailSvc EmailSender
+	smsSvc   SMSSender
 }
 
-// mockOTPService is a test-only OTPService that always issues "1234".
-// It stores OTPs in memory — no external provider needed.
-//
-// Replace with a real implementation (Twilio, AWS SNS, etc.) before going to production.
-type mockOTPService struct {
-	mu    sync.Mutex
-	store map[string]otpEntry // key → OTP entry
+// NewOTPService creates a PostgreSQL-backed OTP service.
+func NewOTPService(otpRepo auth.OTPRepository, emailSvc EmailSender, smsSvc SMSSender) auth.OTPService {
+	return &otpService{otpRepo: otpRepo, emailSvc: emailSvc, smsSvc: smsSvc}
 }
 
-// NewMockOTPService returns an OTPService suitable for local development and tests.
-func NewMockOTPService() auth.OTPService {
-	return &mockOTPService{
-		store: make(map[string]otpEntry),
+func (s *otpService) GenerateAndSendSMS(ctx context.Context, key, phone string) error {
+	code, err := s.store(ctx, key)
+	if err != nil {
+		return err
 	}
+	return s.smsSvc.SendSMS(ctx, phone, fmt.Sprintf("Your Drexa verification code: %s", code))
 }
 
-// ── GenerateAndSendEmail ─────────────────────────────────────────────────────
-
-func (s *mockOTPService) GenerateAndSendEmail(_ context.Context, key, email string) error {
-	if key == "" || email == "" {
-		return errors.New("mock_otp: key and email must not be empty")
+func (s *otpService) GenerateAndSendEmail(ctx context.Context, key, email string) error {
+	code, err := s.store(ctx, key)
+	if err != nil {
+		return err
 	}
-
-	s.set(key, mockOTPValue)
-
-	// In a real implementation this would call an email provider.
-	// Here we just log so test output stays visible.
-	log.Printf("[mock_otp] EMAIL → %s | key=%s | otp=%s (expires in %s)",
-		email, key, mockOTPValue, otpTTL)
-
-	return nil
+	return s.emailSvc.SendEmail(ctx, email, "Your Drexa Verification Code",
+		fmt.Sprintf("Your code: %s\nThis code expires in 10 minutes.", code))
 }
 
-// ── GenerateAndSendSMS ───────────────────────────────────────────────────────
-
-func (s *mockOTPService) GenerateAndSendSMS(_ context.Context, key, phone string) error {
-	if key == "" || phone == "" {
-		return errors.New("mock_otp: key and phone must not be empty")
+func (s *otpService) Verify(ctx context.Context, key, code string) (bool, error) {
+	otp, err := s.otpRepo.FindByKey(ctx, key)
+	if err != nil {
+		return false, nil // treat not-found as invalid, not error
 	}
 
-	s.set(key, mockOTPValue)
-
-	// In a real implementation this would call Twilio / AWS SNS / etc.
-	log.Printf("[mock_otp] SMS → %s | key=%s | otp=%s (expires in %s)",
-		phone, key, mockOTPValue, otpTTL)
-
-	return nil
-}
-
-// ── Verify ───────────────────────────────────────────────────────────────────
-
-func (s *mockOTPService) Verify(_ context.Context, key, otp string) (bool, error) {
-	if key == "" || otp == "" {
-		return false, errors.New("mock_otp: key and otp must not be empty")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	entry, ok := s.store[key]
-	if !ok {
-		return false, nil // no OTP issued for this key
-	}
-
-	if time.Now().After(entry.expiresAt) {
-		delete(s.store, key) // clean up expired entry
+	if otp.UsedAt != nil || time.Now().After(otp.ExpiresAt) {
 		return false, nil
 	}
 
-	if entry.otp != otp {
-		return false, nil // wrong code — do NOT consume so caller can handle retry logic
+	if err := bcrypt.CompareHashAndPassword([]byte(otp.CodeHash), []byte(code)); err != nil {
+		return false, nil
 	}
 
-	delete(s.store, key) // consume on success — prevents reuse
+	_ = s.otpRepo.MarkUsed(ctx, otp.OTPID)
 	return true, nil
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-func (s *mockOTPService) set(key, otp string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.store[key] = otpEntry{
-		otp:       otp,
-		expiresAt: time.Now().Add(otpTTL),
+func (s *otpService) store(ctx context.Context, key string) (string, error) {
+	code, err := generateCode()
+	if err != nil {
+		return "", fmt.Errorf("otp: generate code: %w", err)
 	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.MinCost)
+	if err != nil {
+		return "", fmt.Errorf("otp: hash code: %w", err)
+	}
+
+	otp := &auth.OTPCode{
+		OTPID:     uuid.NewString(),
+		Key:       key,
+		CodeHash:  string(hash),
+		ExpiresAt: time.Now().Add(otpTTL),
+	}
+
+	if err := s.otpRepo.Upsert(ctx, otp); err != nil {
+		return "", fmt.Errorf("otp: store: %w", err)
+	}
+
+	return code, nil
+}
+
+// generateCode returns a cryptographically random 6-digit string.
+func generateCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }

@@ -18,16 +18,6 @@ func NewSendGridNotificationService(email EmailSender, appURL string) auth.Notif
 	return &sendgridNotificationService{email: email, appURL: appURL}
 }
 
-func (s *sendgridNotificationService) SendKycApproved(ctx context.Context, _ string, email string) error {
-	body := "Congratulations! Your KYC verification has been approved. You can now access all trading features on Drexa."
-	return s.email.SendEmail(ctx, email, "KYC Approved — Drexa", body)
-}
-
-func (s *sendgridNotificationService) SendKycRejected(ctx context.Context, _ string, email, reason string) error {
-	body := fmt.Sprintf("Your KYC verification was not approved.\n\nReason: %s\n\nPlease resubmit with the correct documents.", reason)
-	return s.email.SendEmail(ctx, email, "KYC Rejected — Drexa", body)
-}
-
 func (s *sendgridNotificationService) SendPasswordChanged(ctx context.Context, _ string, email string) error {
 	body := "Your Drexa account password was changed. If you did not do this, please contact support immediately."
 	return s.email.SendEmail(ctx, email, "Password Changed — Drexa", body)

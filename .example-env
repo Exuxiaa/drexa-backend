@@ -70,3 +70,13 @@ SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxxxxxxxxx
 SENDGRID_FROM_EMAIL=noreply@yourdomain.com
 SENDGRID_FROM_NAME=Drexa
 APP_URL=http://localhost:3000
+
+
+# =========================
+# Stripe Configuration
+# =========================
+
+# Get these from https://dashboard.stripe.com/apikeys
+STRIPE_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxxxxxxxxx
+# Get this from https://dashboard.stripe.com/webhooks after creating the endpoint
+STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxx

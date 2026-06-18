@@ -21,6 +21,18 @@ type WalletRepository interface {
 	FindByID(ctx context.Context, walletID string) (*Wallet, error)
 	FindByUserID(ctx context.Context, userID string) ([]Wallet, error)
 	FindByUserAndCurrency(ctx context.Context, userID string, currency CurrencyCode) (*Wallet, error)
+
+	// FindByIDForUpdate reads a wallet row with a pessimistic write lock (SELECT ... FOR UPDATE).
+	// It must be called inside a TxManager.Do block; concurrent callers block until the
+	// surrounding transaction commits, which serializes balance mutations on the same row.
+	FindByIDForUpdate(ctx context.Context, walletID string) (*Wallet, error)
+}
+
+// TxManager runs a function inside a single database transaction. Repository methods invoked
+// with the context passed to fn execute against that transaction, so a failure anywhere rolls
+// back every write. Nested Do calls reuse the outer transaction.
+type TxManager interface {
+	Do(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
 // TransactionRepository handles persistence for transaction records (append-only — no updates)
@@ -43,6 +55,12 @@ type DepositRepository interface {
 	FindByID(ctx context.Context, depositID string) (*DepositRequest, error)
 	FindByProviderRef(ctx context.Context, providerRef string) (*DepositRequest, error)
 	FindByUserID(ctx context.Context, userID string, limit, offset int) ([]DepositRequest, error)
+}
+
+// CryptoAddressRepository handles persistence for derived on-chain deposit addresses
+type CryptoAddressRepository interface {
+	Create(ctx context.Context, addr *CryptoAddress) error
+	FindByUserAndCurrency(ctx context.Context, userID string, currency CurrencyCode) (*CryptoAddress, error)
 }
 
 // WithdrawalRepository handles persistence for withdrawal requests

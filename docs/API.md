@@ -13,7 +13,7 @@ Protected endpoints require a valid JWT access token. Send it in one of two ways
 | Header | `Authorization: Bearer <access_token>` |
 | Cookie | `access_token=<access_token>` |
 
-Tokens are issued at login and refreshed via `/auth/refresh`. The server also sets `HttpOnly` cookies automatically on login/refresh responses.
+Tokens are issued at sign-in and refreshed via `/auth/refresh`. The server sets `HttpOnly` cookies automatically on sign-in/refresh responses.
 
 ---
 
@@ -31,56 +31,33 @@ All responses are JSON.
 | `200` | OK |
 | `201` | Created |
 | `400` | Bad request / validation error |
-| `401` | Unauthorized / invalid credentials |
-| `409` | Conflict (e.g. email already exists) |
+| `401` | Unauthorized / invalid or expired token |
+| `404` | Resource not found |
+| `422` | Unprocessable entity (e.g. insufficient funds) |
 | `500` | Internal server error |
 
 ---
 
 ## Auth
 
-### Register
+### Sign In
 
 ```
-POST /auth/register
+POST /auth/signin
 ```
 
-Creates a new account and sends an OTP to the provided email.
+Authenticates using a Firebase ID token obtained from the frontend Firebase SDK after the user signs in with Google, Apple, or any configured provider. On the first call for a given Firebase UID, a user record is automatically created. Sets `access_token` and `refresh_token` `HttpOnly` cookies on success.
 
 **Request**
 ```json
 {
-  "email": "user@example.com",
-  "password": "securepassword"
-}
-```
-
-**Response `201`**
-```json
-{ "message": "registration successful, check your email for the OTP" }
-```
-
----
-
-### Login
-
-```
-POST /auth/login
-```
-
-Authenticates with email and password. Sets `access_token` and `refresh_token` cookies on success.
-
-**Request**
-```json
-{
-  "email": "user@example.com",
-  "password": "securepassword"
+  "id_token": "firebase_id_token_from_frontend"
 }
 ```
 
 **Response `200`**
 ```json
-{ "message": "login successful" }
+{ "message": "sign-in successful" }
 ```
 
 ---
@@ -91,13 +68,31 @@ Authenticates with email and password. Sets `access_token` and `refresh_token` c
 POST /auth/logout
 ```
 
-Revokes the current refresh token from the session.
-
-**Request** — no body required (reads `refresh_token` cookie)
+Revokes the current refresh token. Reads the `refresh_token` cookie — no request body required.
 
 **Response `200`**
 ```json
 { "message": "logged out" }
+```
+
+---
+
+### Refresh Token
+
+```
+POST /auth/refresh
+```
+
+Issues a new access token and rotates the refresh token. Reads the `refresh_token` cookie. Sets new `access_token` and `refresh_token` cookies on success.
+
+**Response `200`**
+```json
+{ "message": "token refreshed" }
+```
+
+**Response `401`** — missing, invalid, or expired refresh token
+```json
+{ "error": "invalid or expired token" }
 ```
 
 ---
@@ -119,53 +114,15 @@ Revokes all active sessions for the authenticated user.
 
 ---
 
-### Refresh Token
-
-```
-POST /auth/refresh
-```
-
-Issues a new access token and rotates the refresh token. Reads `refresh_token` cookie.
-
-**Response `200`**
-```json
-{ "message": "token refreshed" }
-```
-
----
-
-## Email / Phone Verification
-
-### Verify Email
-
-```
-POST /auth/verify/email
-```
-
-Verifies the OTP sent to the user's email after registration.
-
-**Request**
-```json
-{
-  "user_id": "uuid",
-  "otp": "123456"
-}
-```
-
-**Response `200`**
-```json
-{ "message": "email verified" }
-```
-
----
-
 ### Verify Phone
 
 ```
 POST /auth/verify/phone
 ```
 
-Verifies the OTP sent to the user's phone number.
+🔒 **Protected**
+
+Verifies the OTP sent to the user's phone number via SMS.
 
 **Request**
 ```json
@@ -180,76 +137,9 @@ Verifies the OTP sent to the user's phone number.
 { "message": "phone verified" }
 ```
 
----
-
-## Password
-
-### Request Password Reset
-
-```
-POST /auth/password/reset
-```
-
-Sends a password reset link to the email if it exists. Always returns `200` to prevent email enumeration.
-
-**Request**
+**Response `401`** — wrong or expired OTP
 ```json
-{
-  "email": "user@example.com"
-}
-```
-
-**Response `200`**
-```json
-{ "message": "if that email exists you will receive a reset link" }
-```
-
----
-
-### Confirm Password Reset
-
-```
-POST /auth/password/reset/confirm
-```
-
-Resets the password using the token from the reset email. Revokes all active sessions on success.
-
-**Request**
-```json
-{
-  "token": "raw_reset_token_from_email",
-  "new_password": "newsecurepassword"
-}
-```
-
-**Response `200`**
-```json
-{ "message": "password reset successful" }
-```
-
----
-
-### Change Password
-
-```
-POST /auth/password/change
-```
-
-🔒 **Protected**
-
-Changes password for the authenticated user. Requires the current password.
-
-**Request**
-```json
-{
-  "old_password": "currentpassword",
-  "new_password": "newsecurepassword"
-}
-```
-
-**Response `200`**
-```json
-{ "message": "password changed" }
+{ "error": "invalid or expired OTP" }
 ```
 
 ---
@@ -288,7 +178,7 @@ POST /auth/pin/verify
 
 🔒 **Protected**
 
-Verifies the trading PIN before a sensitive action.
+Verifies the trading PIN before a sensitive action (e.g. placing a trade or withdrawing funds).
 
 **Request**
 ```json
@@ -302,50 +192,164 @@ Verifies the trading PIN before a sensitive action.
 { "message": "pin verified" }
 ```
 
+**Response `401`** — wrong PIN
+```json
+{ "error": "invalid pin" }
+```
+
 ---
 
-## OAuth (Firebase)
+## Payments
 
-OAuth endpoints require a Firebase ID token obtained from the frontend Firebase SDK after the user signs in with Google, Apple, etc.
-
-### OAuth Register
+### Create Deposit Intent
 
 ```
-POST /auth/oauth/register
+POST /payments/deposit/intent
 ```
 
-Registers a new account using a verified Firebase identity.
+🔒 **Protected**
+
+Creates a Stripe PaymentIntent. The frontend uses the returned `client_secret` with Stripe.js to confirm the payment. A pending transaction record is created immediately with the returned `tx_id`.
+
+Minimum deposit: **$10.00** (1000 cents).
 
 **Request**
 ```json
 {
-  "id_token": "firebase_id_token_from_frontend"
+  "amount": 5000
 }
 ```
+
+> Amounts are in the smallest currency unit (cents for USD). `5000` = $50.00.
 
 **Response `201`**
 ```json
-{ "message": "oauth registration successful" }
+{
+  "client_secret": "pi_xxx_secret_xxx",
+  "tx_id": "uuid"
+}
+```
+
+**Response `400`** — amount below minimum or invalid
+```json
+{ "error": "minimum deposit is $10" }
 ```
 
 ---
 
-### OAuth Login
+### Withdraw
 
 ```
-POST /auth/oauth/login
+POST /payments/withdraw
 ```
 
-Logs in an existing account via Firebase identity. Sets `access_token` and `refresh_token` cookies on success.
+🔒 **Protected**
+
+Debits the user's wallet balance. Minimum withdrawal: **$10.00** (1000 cents).
 
 **Request**
 ```json
 {
-  "id_token": "firebase_id_token_from_frontend"
+  "amount": 2000
 }
 ```
 
+> Amounts are in cents. `2000` = $20.00.
+
 **Response `200`**
 ```json
-{ "message": "oauth login successful" }
+{ "message": "withdrawal recorded" }
 ```
+
+**Response `400`** — amount below minimum or invalid
+```json
+{ "error": "minimum withdrawal is $10" }
+```
+
+**Response `422`** — not enough balance
+```json
+{ "error": "insufficient funds" }
+```
+
+---
+
+### Stripe Webhook
+
+```
+POST /payments/webhook
+```
+
+Receives events from Stripe (e.g. `payment_intent.succeeded`). **Not behind JWT** — authenticity is verified via the `Stripe-Signature` header using `STRIPE_WEBHOOK_SECRET`. Call this endpoint only from Stripe's dashboard webhook configuration.
+
+**Headers** (set by Stripe)
+```
+Stripe-Signature: t=...,v1=...
+```
+
+**Response `200`** — event processed successfully
+
+**Response `400`** — invalid signature or unreadable body
+
+---
+
+## Wallet
+
+### Get Balance
+
+```
+GET /wallet/balance
+```
+
+🔒 **Protected**
+
+Returns the user's current fiat wallet balance.
+
+**Response `200`**
+```json
+{
+  "balance": 15000,
+  "currency": "usd"
+}
+```
+
+> `balance` is in cents. `15000` = $150.00.
+
+---
+
+### Get Transactions
+
+```
+GET /wallet/transactions?limit=20&offset=0
+```
+
+🔒 **Protected**
+
+Returns the user's paginated transaction history, ordered by creation date descending.
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `limit` | integer | Number of records to return (default: 0 = all) |
+| `offset` | integer | Number of records to skip (default: 0) |
+
+**Response `200`**
+```json
+[
+  {
+    "TxID": "uuid",
+    "UserID": "uuid",
+    "Type": "deposit",
+    "Amount": 5000,
+    "Currency": "usd",
+    "Status": "completed",
+    "StripePaymentIntentID": "pi_xxx",
+    "CreatedAt": "2024-01-15T10:30:00Z",
+    "UpdatedAt": "2024-01-15T10:30:45Z"
+  }
+]
+```
+
+> **Type** values: `deposit`, `withdrawal`  
+> **Status** values: `pending`, `completed`, `failed`  
+> **Amount** is in cents.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"time"
 
 	"drexa/internal/auth"
 	"drexa/internal/market"
@@ -15,8 +16,9 @@ func addRoutes(
 	kycUc auth.KycUsecase,
 	adminKycUc auth.AdminKycUsecase,
 	tokenSvc auth.TokenService,
-	fbVerifier auth.FirebaseVerifier,
+	rateLimiter auth.RateLimiter,
 	walletUc wallet.WalletUsecase,
+	cryptoWalletUc wallet.CryptoWalletUsecase,
 	adminWalletUc wallet.AdminWalletUsecase,
 	sharedWalletUc sharedwallet.WalletService,
 	sharedTransferUc sharedwallet.InternalTransferService,
@@ -28,8 +30,13 @@ func addRoutes(
 
 	jwt := auth.JWTMiddleware(tokenSvc)
 
+	// Brute-force protection on credential endpoints, keyed per client IP.
+	loginRL := auth.RateLimitMiddleware(rateLimiter, "login", 10, 15*time.Minute)
+	registerRL := auth.RateLimitMiddleware(rateLimiter, "register", 5, time.Hour)
+
 	// ── Public auth ──────────────────────────────────────────────────────────
-	mux.Handle("POST /api/v1/auth/signin", auth.HandleFirebaseSignIn(authUc, fbVerifier, secureCookies))
+	mux.Handle("POST /api/v1/auth/register", registerRL(auth.HandleRegister(authUc, secureCookies)))
+	mux.Handle("POST /api/v1/auth/login", loginRL(auth.HandleLogin(authUc, secureCookies)))
 	mux.Handle("POST /api/v1/auth/logout", auth.HandleLogout(authUc))
 	mux.Handle("POST /api/v1/auth/refresh", auth.HandleRefreshToken(authUc, secureCookies))
 
@@ -51,6 +58,13 @@ func addRoutes(
 	mux.Handle("POST /api/v1/wallet/deposit", jwt(wallet.HandleInitiateDeposit(walletUc)))
 	mux.Handle("POST /api/v1/wallet/withdraw", jwt(wallet.HandleInitiateWithdrawal(walletUc)))
 	mux.Handle("GET /api/v1/wallet/transactions", jwt(wallet.HandleGetTransactions(walletUc)))
+
+	// ── Wallet — crypto (Tatum) on-chain deposit addresses + balances (JWT required) ──
+	mux.Handle("GET /api/v1/wallet/crypto/assets", jwt(wallet.HandleGetCryptoAssets(cryptoWalletUc)))
+	mux.Handle("GET /api/v1/wallet/crypto/address/{currency}", jwt(wallet.HandleGetCryptoAddress(cryptoWalletUc)))
+
+	// ── Payments — Stripe PaymentIntent for embedded deposit form (JWT required) ──
+	mux.Handle("POST /api/v1/payments/deposit/intent", jwt(wallet.HandleCreateDepositIntent(walletUc)))
 
 	// ── Wallet — payment provider webhooks (no JWT — secured by signature) ───
 	mux.Handle("POST /api/v1/webhooks/deposit", wallet.HandleDepositWebhook(walletUc))
