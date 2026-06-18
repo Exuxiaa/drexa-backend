@@ -76,9 +76,17 @@ func addRoutes(
 	mux.Handle("POST /api/v1/orders",               jwt(order.HandleOrder(orderSvc)))
 	mux.Handle("DELETE /api/v1/orders/{orderID}",   jwt(order.HandleCancelOrder(orderSvc)))
 
+	// ── Payments — Stripe PaymentIntent (embedded Elements flow) ──────────────
+	// The frontend's DepositPanel posts here to get a client_secret for Stripe.js.
+	mux.Handle("POST /api/v1/payments/deposit/intent", jwt(wallet.HandleCreateDepositIntent(walletUc)))
+	// Stripe webhook alias (mirrors /wallet/deposit/webhook) — signature-verified, public.
+	mux.Handle("POST /api/v1/payments/webhook",        wallet.HandleDepositWebhook(walletUc, cfg.Stripe.WebhookSecret))
+
 	// ── Wallet — user facing (JWT required) ───────────────────────────────────
 	mux.Handle("GET /api/v1/wallet/balances",            jwt(wallet.HandleGetBalances(walletUc)))
 	mux.Handle("GET /api/v1/wallet/balances/{currency}", jwt(wallet.HandleGetBalance(walletUc)))
+	// Singular alias — the frontend calls GET /wallet/balance/{currency}.
+	mux.Handle("GET /api/v1/wallet/balance/{currency}",  jwt(wallet.HandleGetBalance(walletUc)))
 	mux.Handle("POST /api/v1/wallet/deposit",            jwt(wallet.HandleInitiateDeposit(walletUc)))
 	mux.Handle("POST /api/v1/wallet/withdraw",           jwt(wallet.HandleInitiateWithdrawal(walletUc)))
 	mux.Handle("GET /api/v1/wallet/transactions",        jwt(wallet.HandleGetTransactions(walletUc)))

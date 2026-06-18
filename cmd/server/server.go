@@ -119,7 +119,7 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	if cfg.Stripe.SecretKey != "" {
 		paymentService = walletSvc.NewStripePaymentService(cfg.Stripe.SecretKey, cfg.SendGrid.AppURL)
 	}
-	cryptoProvider       := walletSvc.NewTatumService(cfg.Tatum.APIKey, "https://api.tatum.io")
+	cryptoProvider       := walletSvc.NewTatumService(cfg.Tatum, "https://api.tatum.io")
 	txManager            := walletRepo.NewTxManager(db)
 	
 	walletUsecase        := walletUc.NewWalletUsecase(walletRepository, txRepository, depositRepository, withdrawalRepository, paymentService, cryptoProvider, txManager)
@@ -149,7 +149,9 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	mux := http.NewServeMux()
 	addRoutes(mux, cfg, authUsecase, kycHandler, orderService, walletUsecase, adminWalletUsecase, cryptoWalletUsecase, marketHub, tokenService, checkoutHandler)
 
-	handler := middleware.RequestID(mux)
+	// CORS must run before everything else so it can answer preflight OPTIONS
+	// and attach credential headers to every response.
+	handler := middleware.CORS(cfg.App.AllowedOrigins)(middleware.RequestID(mux))
 
 	return &Server{
 		httpServer: &http.Server{

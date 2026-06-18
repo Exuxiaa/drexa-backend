@@ -1,11 +1,24 @@
 package config
 
 import (
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
+
+// splitCSV turns a comma-separated env value into a trimmed, non-empty slice.
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
 
 type Config struct {
 	App      AppConfig
@@ -19,11 +32,12 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Port         string
-	Env          string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
+	Port           string
+	Env            string
+	AllowedOrigins []string
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	IdleTimeout    time.Duration
 }
 
 type DBConfig struct {
@@ -81,6 +95,7 @@ func Load() *Config {
 
 	viper.SetDefault("APP_PORT", ":8080")
 	viper.SetDefault("APP_ENV", "development")
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 	viper.SetDefault("DB_MAX_IDLE_CONNS", 10)
 	viper.SetDefault("DB_MAX_OPEN_CONNS", 100)
 	viper.SetDefault("DB_CONN_MAX_LIFETIME", "1h")
@@ -93,11 +108,12 @@ func Load() *Config {
 
 	return &Config{
 		App: AppConfig{
-			Port:         viper.GetString("APP_PORT"),
-			Env:          viper.GetString("APP_ENV"),
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 10 * time.Second,
-			IdleTimeout:  120 * time.Second,
+			Port:           viper.GetString("APP_PORT"),
+			Env:            viper.GetString("APP_ENV"),
+			AllowedOrigins: splitCSV(viper.GetString("CORS_ALLOWED_ORIGINS")),
+			ReadTimeout:    5 * time.Second,
+			WriteTimeout:   10 * time.Second,
+			IdleTimeout:    120 * time.Second,
 		},
 		DB: DBConfig{
 			DSN:             viper.GetString("DB_DSN"),
