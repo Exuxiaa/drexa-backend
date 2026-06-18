@@ -45,6 +45,7 @@ func addRoutes(
 	mux.Handle("POST /api/v1/auth/refresh",  auth.HandleRefreshToken(authUc))
 
 	// ── Protected auth (JWT required) ─────────────────────────────────────────
+	mux.Handle("GET /api/v1/auth/me",                jwt(auth.HandleGetMe(authUc)))
 	mux.Handle("POST /api/v1/auth/logout/all",       jwt(auth.HandleLogoutAll(authUc)))
 	mux.Handle("POST /api/v1/auth/password/change",  jwt(auth.HandleChangePassword(authUc)))
 	mux.Handle("POST /api/v1/auth/otp/phone/send",   jwt(auth.HandleSendPhoneOTP(authUc)))

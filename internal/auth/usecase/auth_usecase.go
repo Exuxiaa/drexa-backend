@@ -73,6 +73,10 @@ func (uc *authUsecase) Register(ctx context.Context, email, phone, pw string) (*
 	return user, nil
 }
 
+func (uc *authUsecase) GetUser(ctx context.Context, userID string) (*auth.User, error) {
+	return uc.userRepo.FindByID(ctx, userID)
+}
+
 func (uc *authUsecase) Login(ctx context.Context, email, pw string) (*auth.AuthToken, error) {
 	user, err := uc.userRepo.FindByEmail(ctx, email)
 	if err != nil {
@@ -327,7 +331,7 @@ func (uc *authUsecase) GoogleLogin(ctx context.Context, token string) (*auth.Aut
 			user = &auth.User{
 				UserID:       uuid.NewString(),
 				Email:        email,
-				Phone:        "", // Will leave phone empty initially
+				Phone:        "placeholder:" + uuid.NewString(), // Avoid unique constraint on empty string
 				PasswordHash: hash,
 				Role:         auth.RoleUser,
 				KycLevel:     0,
