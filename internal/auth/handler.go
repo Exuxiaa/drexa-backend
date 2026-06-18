@@ -18,6 +18,10 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+type GoogleLoginRequest struct {
+	IDToken string `json:"id_token"`
+}
+
 type ChangePasswordRequest struct {
 	OldPassword string `json:"old_password"`
 	NewPassword string `json:"new_password"`
@@ -111,6 +115,33 @@ func HandleLogin(u AuthUsecase) http.HandlerFunc {
 
 		setAuthCookies(w, token.AccessToken, token.RefreshToken)
 		sendJSON(w, http.StatusOK, MessageResponse{Message: "login successful"})
+	}
+}
+
+func HandleGoogleLogin(u AuthUsecase) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req GoogleLoginRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "invalid input"})
+			return
+		}
+
+		token, err := u.GoogleLogin(r.Context(), req.IDToken)
+		if err != nil {
+			sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: "invalid google token"})
+			return
+		}
+
+		if token.RequiresTwoFA {
+			sendJSON(w, http.StatusOK, map[string]any{
+				"requires_2fa":    true,
+				"challenge_token": token.ChallengeToken,
+			})
+			return
+		}
+
+		setAuthCookies(w, token.AccessToken, token.RefreshToken)
+		sendJSON(w, http.StatusOK, MessageResponse{Message: "google login successful"})
 	}
 }
 

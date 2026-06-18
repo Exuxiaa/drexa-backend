@@ -40,6 +40,7 @@ func addRoutes(
 	// ── Public auth ───────────────────────────────────────────────────────────
 	mux.Handle("POST /api/v1/auth/register", auth.HandleRegister(authUc))
 	mux.Handle("POST /api/v1/auth/login",    auth.HandleLogin(authUc))
+	mux.Handle("POST /api/v1/auth/google",   auth.HandleGoogleLogin(authUc))
 	mux.Handle("POST /api/v1/auth/logout",   auth.HandleLogout(authUc))
 	mux.Handle("POST /api/v1/auth/refresh",  auth.HandleRefreshToken(authUc))
 

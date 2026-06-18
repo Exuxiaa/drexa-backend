@@ -33,6 +33,7 @@ RUN adduser \
 USER appuser
 
 COPY --from=build /bin/server /bin/
+COPY migrations /migrations
 
 EXPOSE 8080
 

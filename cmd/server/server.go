@@ -71,7 +71,7 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	)
 
 	// ── Auth usecase ──────────────────────────────────────────────────────────
-	authUsecase := authUc.NewAuthUsecase(userRepo, refreshTokenRepo, otpService, tokenService)
+	authUsecase := authUc.NewAuthUsecase(userRepo, refreshTokenRepo, otpService, tokenService, cfg.Google.ClientID)
 
 	// ── KYC domain ────────────────────────────────────────────────────────────
 	kycRepository := kycRepo.New(db)
@@ -135,7 +135,7 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	mux := http.NewServeMux()
 	addRoutes(mux, cfg, authUsecase, kycHandler, orderService, walletUsecase, adminWalletUsecase, cryptoWalletUsecase, marketHub, tokenService, checkoutHandler)
 
-	handler := middleware.RequestID(mux)
+	handler := middleware.CORS(cfg.App.AllowedOrigins)(middleware.RequestID(mux))
 
 	return &Server{
 		httpServer: &http.Server{

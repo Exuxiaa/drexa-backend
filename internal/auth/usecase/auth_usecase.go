@@ -2,8 +2,10 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"time"
 
@@ -23,6 +25,7 @@ type authUsecase struct {
 	tokenRepo   auth.RefreshTokenRepository
 	otpService  auth.OTPService
 	tokenSvc    auth.TokenService
+	googleClientID string
 }
 
 func NewAuthUsecase(
@@ -30,12 +33,14 @@ func NewAuthUsecase(
 	tokenRepo auth.RefreshTokenRepository,
 	otpService auth.OTPService,
 	tokenSvc auth.TokenService,
+	googleClientID string,
 ) auth.AuthUsecase {
 	return &authUsecase{
-		userRepo:   userRepo,
-		tokenRepo:  tokenRepo,
-		otpService: otpService,
-		tokenSvc:   tokenSvc,
+		userRepo:       userRepo,
+		tokenRepo:      tokenRepo,
+		otpService:     otpService,
+		tokenSvc:       tokenSvc,
+		googleClientID: googleClientID,
 	}
 }
 
@@ -283,4 +288,65 @@ func (uc *authUsecase) issueTokenPair(ctx context.Context, user *auth.User) (*au
 		TokenType:    "Bearer",
 		ExpiresAt:    time.Now().Add(15 * time.Minute),
 	}, nil
+}
+
+func (uc *authUsecase) GoogleLogin(ctx context.Context, token string) (*auth.AuthToken, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+	if err != nil {
+		return nil, fmt.Errorf("google_login: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("google_login: fetch userinfo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("google_login: invalid token (status %d)", resp.StatusCode)
+	}
+
+	var userInfo struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		return nil, fmt.Errorf("google_login: decode userinfo: %w", err)
+	}
+
+	email := userInfo.Email
+	if email == "" {
+		return nil, errors.New("google_login: no email found in token")
+	}
+
+	user, err := uc.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			// Auto-register user if they don't exist
+			hash, _ := password.Hash(uuid.NewString()) // random password
+			user = &auth.User{
+				UserID:       uuid.NewString(),
+				Email:        email,
+				Phone:        "", // Will leave phone empty initially
+				PasswordHash: hash,
+				Role:         auth.RoleUser,
+				KycLevel:     0,
+			}
+			if err := uc.userRepo.Create(ctx, user); err != nil {
+				return nil, fmt.Errorf("google_login: auto-register failed: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("google_login: database error: %w", err)
+		}
+	}
+
+	if user.TwoFAEnabled {
+		challengeToken, err := uc.tokenSvc.GenerateTwoFAChallengeToken(ctx, user.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("google_login: generate 2fa challenge: %w", err)
+		}
+		return &auth.AuthToken{RequiresTwoFA: true, ChallengeToken: challengeToken}, nil
+	}
+
+	return uc.issueTokenPair(ctx, user)
 }

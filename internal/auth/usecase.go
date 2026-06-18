@@ -7,6 +7,7 @@ type AuthUsecase interface {
 	// Registration & login
 	Register(ctx context.Context, email, phone, password string) (*User, error)
 	Login(ctx context.Context, email, password string) (*AuthToken, error)
+	GoogleLogin(ctx context.Context, idToken string) (*AuthToken, error)
 
 	// Session management
 	RefreshToken(ctx context.Context, rawRefreshToken string) (*AuthToken, error)
