@@ -26,6 +26,7 @@ type Config struct {
 	JWT      JWTConfig
 	Twilio   TwilioConfig
 	SendGrid SendGridConfig
+	Resend   ResendConfig
 	Tatum    TatumConfig
 	Stripe   StripeConfig
 	PayPal   PayPalConfig
@@ -70,6 +71,12 @@ type SendGridConfig struct {
 	FromEmail string
 	FromName  string
 	AppURL    string
+}
+
+type ResendConfig struct {
+	APIKey    string
+	FromEmail string
+	FromName  string
 }
 
 type TatumConfig struct {
@@ -120,6 +127,10 @@ func Load() *Config {
 	viper.SetDefault("JWT_REFRESH_EXPIRATION", "168h")
 	viper.SetDefault("SENDGRID_FROM_NAME", "Drexa")
 	viper.SetDefault("APP_URL", "http://localhost:3000")
+	// Resend (email provider). onboarding@resend.dev works in test mode without a
+	// verified domain, but can only deliver to the Resend account owner's address.
+	viper.SetDefault("RESEND_FROM_EMAIL", "onboarding@resend.dev")
+	viper.SetDefault("RESEND_FROM_NAME", "Drexa")
 	// PayPal Payouts — default to sandbox so local dev never hits live money.
 	viper.SetDefault("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com")
 	// Didit "Drexa" KYC workflow. Per-session config, not a secret — overridable via env.
@@ -155,6 +166,11 @@ func Load() *Config {
 			FromEmail: viper.GetString("SENDGRID_FROM_EMAIL"),
 			FromName:  viper.GetString("SENDGRID_FROM_NAME"),
 			AppURL:    viper.GetString("APP_URL"),
+		},
+		Resend: ResendConfig{
+			APIKey:    viper.GetString("RESEND_API_KEY"),
+			FromEmail: viper.GetString("RESEND_FROM_EMAIL"),
+			FromName:  viper.GetString("RESEND_FROM_NAME"),
 		},
 		Tatum: TatumConfig{
 			APIKey:        viper.GetString("TATUM_TESTNET_API_KEY"),

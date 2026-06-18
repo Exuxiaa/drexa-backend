@@ -68,9 +68,15 @@ TWILIO_FROM_PHONE=+1234567890
 
 
 # =========================
-# SendGrid Configuration
+# Email Configuration
 # =========================
+# Resend is the primary email provider. When RESEND_API_KEY is set it takes
+# precedence; otherwise the server falls back to SendGrid (below).
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
+RESEND_FROM_EMAIL=onboarding@resend.dev
+RESEND_FROM_NAME=Drexa
 
+# SendGrid (fallback — used only when RESEND_API_KEY is empty)
 SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxxxxxxxxx
 SENDGRID_FROM_EMAIL=noreply@yourdomain.com
 SENDGRID_FROM_NAME=Drexa

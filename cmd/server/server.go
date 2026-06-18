@@ -60,7 +60,11 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	otpRepo := authRepo.NewOTPRepository(db)
 
 	// ── Auth services ─────────────────────────────────────────────────────────
-	emailSender := authSvc.NewSendGridEmailSender(cfg.SendGrid.APIKey, cfg.SendGrid.FromEmail, cfg.SendGrid.FromName)
+	// Email: prefer Resend when configured, otherwise fall back to SendGrid.
+	var emailSender authSvc.EmailSender = authSvc.NewSendGridEmailSender(cfg.SendGrid.APIKey, cfg.SendGrid.FromEmail, cfg.SendGrid.FromName)
+	if cfg.Resend.APIKey != "" {
+		emailSender = authSvc.NewResendEmailSender(cfg.Resend.APIKey, cfg.Resend.FromEmail, cfg.Resend.FromName)
+	}
 	smsSender := authSvc.NewTwilioSMSSender(cfg.Twilio.AccountSID, cfg.Twilio.AuthToken, cfg.Twilio.FromPhone)
 	otpService := authSvc.NewOTPService(otpRepo, emailSender, smsSender)
 	tokenService := authSvc.NewTokenService(
