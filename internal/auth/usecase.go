@@ -9,6 +9,9 @@ type AuthUsecase interface {
 	Login(ctx context.Context, email, password string) (*AuthToken, error)
 	GoogleLogin(ctx context.Context, idToken string) (*AuthToken, error)
 
+	// User Profile
+	GetUser(ctx context.Context, userID string) (*User, error)
+
 	// Session management
 	RefreshToken(ctx context.Context, rawRefreshToken string) (*AuthToken, error)
 	Logout(ctx context.Context, rawRefreshToken string) error

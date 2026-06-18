@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 900,
 	})
 	http.SetCookie(w, &http.Cookie{
-		Name: "refresh_token", Value: refresh, Path: "/",
+		Name: "refresh_token", Value: refresh, Path: "/api/v1/auth/refresh",
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 3600,
 	})
 }
@@ -128,7 +129,7 @@ func HandleGoogleLogin(u AuthUsecase) http.HandlerFunc {
 
 		token, err := u.GoogleLogin(r.Context(), req.IDToken)
 		if err != nil {
-			sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: "invalid google token"})
+			sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: err.Error()})
 			return
 		}
 
@@ -175,6 +176,37 @@ func HandleRefreshToken(u AuthUsecase) http.HandlerFunc {
 }
 
 // ─── Protected Handlers (require JWTMiddleware) ───────────────────────────────
+
+func HandleGetMe(u AuthUsecase) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := UserFromContext(r.Context())
+		if !ok {
+			sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: "unauthorized"})
+			return
+		}
+
+		user, err := u.GetUser(r.Context(), claims.UserID)
+		if err != nil {
+			sendJSON(w, http.StatusNotFound, MessageResponse{Error: "user not found"})
+			return
+		}
+
+		phoneResp := user.Phone
+		if strings.HasPrefix(phoneResp, "placeholder:") {
+			phoneResp = ""
+		}
+
+		sendJSON(w, http.StatusOK, map[string]any{
+			"user_id":        user.UserID,
+			"email":          user.Email,
+			"phone":          phoneResp,
+			"role":           user.Role,
+			"kyc_level":      user.KycLevel,
+			"two_fa_enabled": user.TwoFAEnabled,
+			"created_at":     user.CreatedAt,
+		})
+	}
+}
 
 func HandleLogoutAll(u AuthUsecase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
