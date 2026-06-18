@@ -76,6 +76,9 @@ func (s *StripePaymentService) CreatePaymentIntent(
 	params := &stripe.PaymentIntentParams{
 		Amount:   stripe.Int64(amount),
 		Currency: stripe.String(strings.ToLower(string(currency))),
+		AutomaticPaymentMethods: &stripe.PaymentIntentAutomaticPaymentMethodsParams{
+			Enabled: stripe.Bool(true),
+		},
 	}
 	params.AddMetadata("deposit_id", depositID)
 	

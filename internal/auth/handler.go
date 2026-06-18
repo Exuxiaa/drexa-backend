@@ -52,17 +52,17 @@ func sendJSON(w http.ResponseWriter, status int, payload any) {
 func setAuthCookies(w http.ResponseWriter, access, refresh string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "access_token", Value: access, Path: "/",
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 900,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode, MaxAge: 900,
 	})
 	http.SetCookie(w, &http.Cookie{
 		Name: "refresh_token", Value: refresh, Path: "/api/v1/auth/refresh",
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 3600,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode, MaxAge: 7 * 24 * 3600,
 	})
 }
 
 func clearAuthCookies(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: "access_token", Value: "", Path: "/", MaxAge: -1})
-	http.SetCookie(w, &http.Cookie{Name: "refresh_token", Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "access_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode})
+	http.SetCookie(w, &http.Cookie{Name: "refresh_token", Value: "", Path: "/api/v1/auth/refresh", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode})
 }
 
 // ─── Public Auth Handlers ─────────────────────────────────────────────────────
