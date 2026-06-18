@@ -3,7 +3,9 @@ package kyc
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/rs/zerolog/log"
 )
@@ -11,11 +13,12 @@ import (
 type Handler struct {
 	usecase      Usecase
 	adminUsecase AdminUsecase
+	diditUsecase DiditUsecase // optional; nil when Didit is not configured
 	getUserID    func(r *http.Request) string
 }
 
-func NewHandler(uc Usecase, admin AdminUsecase, getUserID func(r *http.Request) string) *Handler {
-	return &Handler{usecase: uc, adminUsecase: admin, getUserID: getUserID}
+func NewHandler(uc Usecase, admin AdminUsecase, didit DiditUsecase, getUserID func(r *http.Request) string) *Handler {
+	return &Handler{usecase: uc, adminUsecase: admin, diditUsecase: didit, getUserID: getUserID}
 }
 
 // POST /api/v1/kyc/submit
@@ -87,6 +90,103 @@ func (h *Handler) HandleGetStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sub)
+}
+
+// POST /api/v1/kyc/didit/session
+// Creates a Didit verification session for the authenticated user and returns
+// the hosted url for the frontend SDK / iframe / redirect.
+func (h *Handler) HandleStartDiditVerification(w http.ResponseWriter, r *http.Request) {
+	if h.diditUsecase == nil {
+		http.Error(w, "identity verification not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := h.getUserID(r)
+	if userID == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session, err := h.diditUsecase.StartVerification(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		log.Ctx(r.Context()).Error().Err(err).Msg("kyc: didit start verification failed")
+		http.Error(w, "could not start verification", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	// Return only what the client needs (url + session_id), never the api key.
+	json.NewEncoder(w).Encode(map[string]string{
+		"url":        session.URL,
+		"session_id": session.SessionID,
+	})
+}
+
+// POST /api/v1/kyc/didit/webhook  (public — authenticated by HMAC signature)
+// Verifies X-Signature-V2 + timestamp freshness, dedupes on event_id, then
+// applies the decision. Always returns 2xx quickly to Didit.
+func (h *Handler) HandleDiditWebhook(w http.ResponseWriter, r *http.Request) {
+	if h.diditUsecase == nil {
+		http.Error(w, "identity verification not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	const maxBody = int64(1 << 20)
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil {
+		http.Error(w, "unreadable body", http.StatusServiceUnavailable)
+		return
+	}
+
+	sig := r.Header.Get("X-Signature-V2")
+	ts, _ := strconv.ParseInt(r.Header.Get("X-Timestamp"), 10, 64)
+
+	// Verify freshness + HMAC before trusting any field in the body.
+	if err := h.diditUsecase.Service().VerifyWebhook(raw, sig, ts); err != nil {
+		log.Ctx(r.Context()).Warn().Err(err).Msg("kyc: didit webhook verification failed")
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	var event DiditWebhookEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	// Idempotency — dedupe on event_id (unique per delivery attempt).
+	if event.EventID != "" {
+		processed, err := h.diditUsecase.Repo().IsEventProcessed(r.Context(), event.EventID)
+		if err != nil {
+			log.Ctx(r.Context()).Error().Err(err).Msg("kyc: didit idempotency check failed")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if processed {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
+	if err := h.diditUsecase.HandleWebhook(r.Context(), &event); err != nil {
+		// 5xx so Didit retries (~1 min, then ~4 min).
+		log.Ctx(r.Context()).Error().Err(err).Msg("kyc: didit webhook processing failed")
+		http.Error(w, "processing failed", http.StatusInternalServerError)
+		return
+	}
+
+	if event.EventID != "" {
+		if err := h.diditUsecase.Repo().MarkEventProcessed(r.Context(), event.EventID); err != nil {
+			log.Ctx(r.Context()).Error().Err(err).Msg("kyc: didit mark processed failed")
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // GET /api/v1/admin/kyc?status=pending

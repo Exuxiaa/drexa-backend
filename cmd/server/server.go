@@ -80,6 +80,20 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	kycUsecase := kycUc.New(kycRepository, kycUserSvc)
 	adminKycUsecase := kycUc.NewAdmin(kycRepository, kycUserSvc, kycNotifSvc)
 
+	// Didit identity verification (optional — only when an API key is configured).
+	var diditKycUsecase kyc.DiditUsecase
+	if cfg.Didit.APIKey != "" {
+		// Didit returns the user to this frontend route after the hosted flow.
+		diditCallback := cfg.SendGrid.AppURL + "/verify/done"
+		diditService := kycSvc.NewDiditService(
+			cfg.Didit.APIKey,
+			cfg.Didit.WebhookSecret,
+			cfg.Didit.WorkflowID,
+			diditCallback,
+		)
+		diditKycUsecase = kycUc.NewDidit(kycRepository, kycUserSvc, kycNotifSvc, diditService)
+	}
+
 	getUserID := func(r *http.Request) string {
 		claims, ok := auth.UserFromContext(r.Context())
 		if !ok {
@@ -87,7 +101,7 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 		}
 		return claims.UserID
 	}
-	kycHandler := kyc.NewHandler(kycUsecase, adminKycUsecase, getUserID)
+	kycHandler := kyc.NewHandler(kycUsecase, adminKycUsecase, diditKycUsecase, getUserID)
 
 	// ── Order domain ──────────────────────────────────────────────────────────
 	orderRepository := orderRepo.New(db)
@@ -105,12 +119,12 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	if cfg.Stripe.SecretKey != "" {
 		paymentService = walletSvc.NewStripePaymentService(cfg.Stripe.SecretKey, cfg.SendGrid.AppURL)
 	}
-	cryptoProvider := walletSvc.NewTatumService(cfg.Tatum, "https://api.tatum.io")
-	txManager := walletRepo.NewTxManager(db)
-
-	walletUsecase := walletUc.NewWalletUsecase(walletRepository, txRepository, depositRepository, withdrawalRepository, paymentService, cryptoProvider, txManager)
-	adminWalletUsecase := walletUc.NewAdminWalletUsecase(walletRepository, txRepository, withdrawalRepository, paymentService, txManager)
-	cryptoWalletUsecase := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
+	cryptoProvider       := walletSvc.NewTatumService(cfg.Tatum, "https://api.tatum.io")
+	txManager            := walletRepo.NewTxManager(db)
+	
+	walletUsecase        := walletUc.NewWalletUsecase(walletRepository, txRepository, depositRepository, withdrawalRepository, paymentService, cryptoProvider, txManager)
+	adminWalletUsecase   := walletUc.NewAdminWalletUsecase(walletRepository, txRepository, withdrawalRepository, paymentService, txManager)
+	cryptoWalletUsecase  := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
 
 	// ── Market data (real-time WebSocket feed) ─────────────────────────────────
 	marketHub := market.NewHub()
@@ -135,6 +149,8 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	mux := http.NewServeMux()
 	addRoutes(mux, cfg, authUsecase, kycHandler, orderService, walletUsecase, adminWalletUsecase, cryptoWalletUsecase, marketHub, tokenService, checkoutHandler)
 
+	// CORS must run before everything else so it can answer preflight OPTIONS
+	// and attach credential headers to every response.
 	handler := middleware.CORS(cfg.App.AllowedOrigins)(middleware.RequestID(mux))
 
 	return &Server{

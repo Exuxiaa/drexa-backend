@@ -33,6 +33,11 @@ type Submission struct {
 	ReviewedAt      *time.Time `gorm:"column:reviewed_at"`
 	CreatedAt       time.Time  `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt       time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+
+	// Didit identity-verification session tracking (migration 000008).
+	DiditSessionID  string `gorm:"column:didit_session_id;index"`
+	DiditSessionURL string `gorm:"column:didit_session_url"`
+	DiditStatus     string `gorm:"column:didit_status"` // raw Didit status literal, e.g. "Approved"
 }
 
 // UserSnapshot is the minimal user data KYC needs.
@@ -41,6 +46,41 @@ type UserSnapshot struct {
 	UserID string
 	Email  string
 }
+
+// ProcessedEvent records one consumed Didit webhook delivery (idempotency).
+type ProcessedEvent struct {
+	EventID     string    `gorm:"primaryKey;column:event_id"`
+	ProcessedAt time.Time `gorm:"column:processed_at;autoCreateTime"`
+}
+
+func (ProcessedEvent) TableName() string { return "didit_processed_events" }
+
+// ─── Didit Verification ───────────────────────────────────────────────────────
+
+// DiditSession is what a create-session call returns to the client.
+type DiditSession struct {
+	SessionID string `json:"session_id"`
+	URL       string `json:"url"`
+	Status    string `json:"status"`
+}
+
+// DiditWebhookEvent is the V3 session webhook envelope (only fields we consume).
+type DiditWebhookEvent struct {
+	EventID     string `json:"event_id"`
+	WebhookType string `json:"webhook_type"`
+	SessionID   string `json:"session_id"`
+	Status      string `json:"status"`     // case-sensitive literal: "Approved", "Declined", ...
+	VendorData  string `json:"vendor_data"` // our internal user id
+}
+
+// Didit session status literals (mixed-case, compared case-sensitively).
+const (
+	DiditApproved   = "Approved"
+	DiditDeclined   = "Declined"
+	DiditInReview   = "In Review"
+	DiditResubmit   = "Resubmitted"
+	DiditKycExpired = "Kyc Expired"
+)
 
 // ─── Repository Interface ─────────────────────────────────────────────────────
 
@@ -52,6 +92,14 @@ type Repository interface {
 	FindByID(ctx context.Context, submissionID string) (*Submission, error)
 	FindLatestByUserID(ctx context.Context, userID string) (*Submission, error)
 	FindByStatus(ctx context.Context, status Status) ([]Submission, error)
+
+	// Didit session tracking.
+	FindByDiditSessionID(ctx context.Context, sessionID string) (*Submission, error)
+	UpdateDiditResult(ctx context.Context, sessionID, diditStatus string, status Status) error
+
+	// Webhook idempotency.
+	IsEventProcessed(ctx context.Context, eventID string) (bool, error)
+	MarkEventProcessed(ctx context.Context, eventID string) error
 }
 
 // ─── Service Interfaces ───────────────────────────────────────────────────────
@@ -74,6 +122,14 @@ type NotificationService interface {
 	SendKycRejected(ctx context.Context, userID, email, reason string) error
 }
 
+// DiditService is the Didit identity-verification provider.
+// CreateSession is called server-side (holds the x-api-key); VerifyWebhook
+// authenticates the X-Signature-V2 HMAC and enforces timestamp freshness.
+type DiditService interface {
+	CreateSession(ctx context.Context, vendorData string) (*DiditSession, error)
+	VerifyWebhook(payload []byte, signatureV2 string, timestamp int64) error
+}
+
 // ─── Usecase Interfaces ───────────────────────────────────────────────────────
 
 type Usecase interface {
@@ -87,6 +143,19 @@ type AdminUsecase interface {
 	GetByID(ctx context.Context, submissionID string) (*Submission, error)
 	Approve(ctx context.Context, submissionID, reviewedBy string) error
 	Reject(ctx context.Context, submissionID, reviewedBy, reason string) error
+}
+
+// DiditUsecase drives the Didit-backed verification flow.
+type DiditUsecase interface {
+	// StartVerification creates a Didit session for the user and persists a
+	// pending submission row tracking that session. Returns the hosted url.
+	StartVerification(ctx context.Context, userID string) (*DiditSession, error)
+	// HandleWebhook applies an already-verified, deduped webhook decision.
+	HandleWebhook(ctx context.Context, event *DiditWebhookEvent) error
+	// Service exposes the underlying provider for signature verification at the edge.
+	Service() DiditService
+	// Repo exposes idempotency checks at the edge before dispatch.
+	Repo() Repository
 }
 
 // ─── Domain Errors ───────────────────────────────────────────────────────────
