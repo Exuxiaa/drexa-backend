@@ -89,3 +89,9 @@ func (r *userRepository) UpdateKycLevel(ctx context.Context, userID, reviewedBy 
 		Where("user_id = ?", userID).
 		Update("kyc_level", level).Error
 }
+
+func (r *userRepository) UpdateStripeCustomerID(ctx context.Context, userID, stripeCustomerID string) error {
+	return r.db.WithContext(ctx).Model(&auth.User{}).
+		Where("user_id = ?", userID).
+		Update("stripe_customer_id", stripeCustomerID).Error
+}

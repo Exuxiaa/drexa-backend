@@ -2,26 +2,31 @@ package migrate
 
 import (
 	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
-// Up runs all pending migrations from migrationsPath (e.g. "migrations").
+// Up runs all pending migrations from the embedded filesystem.
 // ErrNoChange is treated as success.
-func Up(db *sql.DB, migrationsPath string) error {
+func Up(db *sql.DB, fs embed.FS, migrationsPath string) error {
 	driver, err := postgres.WithInstance(db, &postgres.Config{})
 	if err != nil {
 		return fmt.Errorf("migrate: create driver: %w", err)
 	}
 
-	m, err := migrate.NewWithDatabaseInstance(
-		"file://"+migrationsPath,
-		"postgres",
-		driver,
+	d, err := iofs.New(fs, migrationsPath)
+	if err != nil {
+		return fmt.Errorf("migrate: iofs create: %w", err)
+	}
+
+	m, err := migrate.NewWithInstance(
+		"iofs", d,
+		"postgres", driver,
 	)
 	if err != nil {
 		return fmt.Errorf("migrate: create instance: %w", err)

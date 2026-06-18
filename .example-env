@@ -78,5 +78,10 @@ APP_URL=http://localhost:3000
 
 # Get these from https://dashboard.stripe.com/apikeys
 STRIPE_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxxxxxxxxx
-# Get this from https://dashboard.stripe.com/webhooks after creating the endpoint
+# Optional: Override Tatum Webhook URL
+# TATUM_WEBHOOK_URL=https://my-ngrok-url.app/api/v1/webhooks/tatum/deposit
+
+# Stripe Payment Gateway
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...er creating the endpoint
 STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxx

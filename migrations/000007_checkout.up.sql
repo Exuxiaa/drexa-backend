@@ -1,0 +1,10 @@
+ALTER TABLE users ADD COLUMN stripe_customer_id VARCHAR(255) DEFAULT '';
+
+CREATE TABLE purchases (
+    purchase_id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(user_id),
+    stripe_session_id VARCHAR(255) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);

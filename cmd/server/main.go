@@ -9,6 +9,7 @@ import (
 
 	"drexa/internal/platform/migrate"
 	"drexa/internal/platform/postgres"
+	"drexa/migrations"
 	"drexa/pkg/config"
 	"drexa/pkg/logger"
 )
@@ -27,7 +28,7 @@ func main() {
 		log.Fatal().Err(err).Msg("database: get sql.DB failed")
 	}
 
-	if err := migrate.Up(sqlDB, "migrations"); err != nil {
+	if err := migrate.Up(sqlDB, migrations.FS, "."); err != nil {
 		log.Fatal().Err(err).Msg("migrations failed")
 	}
 	log.Info().Msg("migrations: up to date")

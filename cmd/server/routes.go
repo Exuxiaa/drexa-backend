@@ -4,14 +4,17 @@ import (
 	"net/http"
 
 	"drexa/internal/auth"
+	"drexa/internal/checkout"
 	"drexa/internal/kyc"
 	"drexa/internal/market"
 	"drexa/internal/order"
 	"drexa/internal/wallet"
+	"drexa/pkg/config"
 )
 
 func addRoutes(
 	mux *http.ServeMux,
+	cfg *config.Config,
 	authUc auth.AuthUsecase,
 	kycH *kyc.Handler,
 	orderSvc order.Service,
@@ -20,11 +23,19 @@ func addRoutes(
 	cryptoWalletUc wallet.CryptoWalletUsecase,
 	marketHub *market.Hub,
 	tokenSvc auth.TokenService,
+	checkoutH *checkout.Handler,
 ) {
 	mux.Handle("/", http.NotFoundHandler())
 
 	jwt   := auth.JWTMiddleware(tokenSvc)
 	admin := auth.RequireRole(auth.RoleAdmin)
+
+	// ── Checkout (Stripe Managed Payments) ────────────────────────────────────
+	if checkoutH != nil {
+		mux.Handle("POST /api/v1/checkout/product", jwt(admin(http.HandlerFunc(checkoutH.CreateProduct))))
+		mux.Handle("POST /api/v1/checkout/session", jwt(http.HandlerFunc(checkoutH.CreateSession)))
+		mux.Handle("POST /api/v1/checkout/webhook", http.HandlerFunc(checkoutH.Webhook))
+	}
 
 	// ── Public auth ───────────────────────────────────────────────────────────
 	mux.Handle("POST /api/v1/auth/register", auth.HandleRegister(authUc))
@@ -75,7 +86,7 @@ func addRoutes(
 	mux.Handle("POST /api/v1/wallet/crypto/withdraw",          jwt(wallet.HandleCryptoWithdrawal(walletUc)))
 
 	// ── Wallet — payment provider webhook (public; verify signature in prod) ───
-	mux.Handle("POST /api/v1/wallet/deposit/webhook", wallet.HandleDepositWebhook(walletUc))
+	mux.Handle("POST /api/v1/wallet/deposit/webhook", wallet.HandleDepositWebhook(walletUc, cfg.Stripe.WebhookSecret))
 	mux.Handle("POST /api/v1/wallet/crypto/webhook",  wallet.HandleCryptoWebhook(cryptoWalletUc))
 
 	// ── Wallet — admin facing (JWT + admin role) ──────────────────────────────

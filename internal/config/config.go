@@ -19,6 +19,12 @@ type Config struct {
 	Twilio   TwilioConfig
 	SendGrid SendGridConfig
 	Tatum    TatumConfig
+	Stripe   StripeConfig
+}
+
+type StripeConfig struct {
+	SecretKey     string
+	WebhookSecret string
 }
 
 type TatumConfig struct {
@@ -129,6 +135,10 @@ func Load() *Config {
 			APIKey:  tatumKey,
 			BaseURL: getEnv("TATUM_BASE_URL", "https://api.tatum.io"),
 			Testnet: tatumEnv != "mainnet",
+		},
+		Stripe: StripeConfig{
+			SecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
+			WebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),
 		},
 	}
 }

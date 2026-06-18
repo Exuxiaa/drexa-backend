@@ -15,6 +15,7 @@ import (
 	authRepo "drexa/internal/auth/repository"
 	authSvc "drexa/internal/auth/service"
 	authUc "drexa/internal/auth/usecase"
+	"drexa/internal/checkout"
 	"drexa/internal/kyc"
 	kycRepo "drexa/internal/kyc/repository"
 	kycSvc "drexa/internal/kyc/service"
@@ -54,14 +55,14 @@ type Server struct {
 
 func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	// ── Auth repositories ─────────────────────────────────────────────────────
-	userRepo         := authRepo.NewUserRepository(db)
+	userRepo := authRepo.NewUserRepository(db)
 	refreshTokenRepo := authRepo.NewRefreshTokenRepository(db)
-	otpRepo          := authRepo.NewOTPRepository(db)
+	otpRepo := authRepo.NewOTPRepository(db)
 
 	// ── Auth services ─────────────────────────────────────────────────────────
-	emailSender  := authSvc.NewSendGridEmailSender(cfg.SendGrid.APIKey, cfg.SendGrid.FromEmail, cfg.SendGrid.FromName)
-	smsSender    := authSvc.NewTwilioSMSSender(cfg.Twilio.AccountSID, cfg.Twilio.AuthToken, cfg.Twilio.FromPhone)
-	otpService   := authSvc.NewOTPService(otpRepo, emailSender, smsSender)
+	emailSender := authSvc.NewSendGridEmailSender(cfg.SendGrid.APIKey, cfg.SendGrid.FromEmail, cfg.SendGrid.FromName)
+	smsSender := authSvc.NewTwilioSMSSender(cfg.Twilio.AccountSID, cfg.Twilio.AuthToken, cfg.Twilio.FromPhone)
+	otpService := authSvc.NewOTPService(otpRepo, emailSender, smsSender)
 	tokenService := authSvc.NewTokenService(
 		[]byte(cfg.JWT.Secret),
 		"drexa.api",
@@ -73,10 +74,10 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	authUsecase := authUc.NewAuthUsecase(userRepo, refreshTokenRepo, otpService, tokenService, cfg.Google.ClientID)
 
 	// ── KYC domain ────────────────────────────────────────────────────────────
-	kycRepository   := kycRepo.New(db)
-	kycUserSvc      := &kycUserServiceAdapter{repo: userRepo}
-	kycNotifSvc     := kycSvc.NewMockNotificationService()
-	kycUsecase      := kycUc.New(kycRepository, kycUserSvc)
+	kycRepository := kycRepo.New(db)
+	kycUserSvc := &kycUserServiceAdapter{repo: userRepo}
+	kycNotifSvc := kycSvc.NewMockNotificationService()
+	kycUsecase := kycUc.New(kycRepository, kycUserSvc)
 	adminKycUsecase := kycUc.NewAdmin(kycRepository, kycUserSvc, kycNotifSvc)
 
 	getUserID := func(r *http.Request) string {
@@ -90,32 +91,49 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 
 	// ── Order domain ──────────────────────────────────────────────────────────
 	orderRepository := orderRepo.New(db)
-	pairService     := orderRepo.NewPairService(db)
-	matchingEngine  := matching.NewEngine()
-	orderService    := order.NewService(orderRepository, pairService, matchingEngine)
+	pairService := orderRepo.NewPairService(db)
+	matchingEngine := matching.NewEngine()
+	orderService := order.NewService(orderRepository, pairService, matchingEngine)
 
 	// ── Wallet domain ─────────────────────────────────────────────────────────
-	walletRepository     := walletRepo.NewWalletRepository(db)
-	txRepository         := walletRepo.NewTransactionRepository(db)
-	depositRepository    := walletRepo.NewDepositRepository(db)
+	walletRepository := walletRepo.NewWalletRepository(db)
+	txRepository := walletRepo.NewTransactionRepository(db)
+	depositRepository := walletRepo.NewDepositRepository(db)
 	withdrawalRepository := walletRepo.NewWithdrawalRepository(db)
-	cryptoAddressRepo    := walletRepo.NewCryptoAddressRepository(db)
-	paymentService       := walletSvc.NewNullPaymentService()
-	cryptoProvider       := walletSvc.NewTatumService(cfg.Tatum.APIKey, "https://api.tatum.io")
-	txManager            := walletRepo.NewTxManager(db)
-	
-	walletUsecase        := walletUc.NewWalletUsecase(walletRepository, txRepository, depositRepository, withdrawalRepository, paymentService, cryptoProvider, txManager)
-	adminWalletUsecase   := walletUc.NewAdminWalletUsecase(walletRepository, txRepository, withdrawalRepository, paymentService, txManager)
-	cryptoWalletUsecase  := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
+	cryptoAddressRepo := walletRepo.NewCryptoAddressRepository(db)
+	paymentService := walletSvc.NewNullPaymentService()
+	if cfg.Stripe.SecretKey != "" {
+		paymentService = walletSvc.NewStripePaymentService(cfg.Stripe.SecretKey, cfg.SendGrid.AppURL)
+	}
+	cryptoProvider := walletSvc.NewTatumService(cfg.Tatum, "https://api.tatum.io")
+	txManager := walletRepo.NewTxManager(db)
+
+	walletUsecase := walletUc.NewWalletUsecase(walletRepository, txRepository, depositRepository, withdrawalRepository, paymentService, cryptoProvider, txManager)
+	adminWalletUsecase := walletUc.NewAdminWalletUsecase(walletRepository, txRepository, withdrawalRepository, paymentService, txManager)
+	cryptoWalletUsecase := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
 
 	// ── Market data (real-time WebSocket feed) ─────────────────────────────────
 	marketHub := market.NewHub()
 	go marketHub.Run()
 	go market.NewBinanceWSClient(marketHub).Run()
 
+	// ── Checkout domain ───────────────────────────────────────────────────────
+	var checkoutHandler *checkout.Handler
+	if cfg.Stripe.SecretKey != "" {
+		purchaseRepo := checkout.NewPurchaseRepository(db)
+		checkoutSvc := checkout.NewCheckoutService(
+			cfg.Stripe.SecretKey,
+			cfg.Stripe.WebhookSecret,
+			cfg.SendGrid.AppURL, // Reusing AppURL as the base URL
+			purchaseRepo,
+			userRepo,
+		)
+		checkoutHandler = checkout.NewHandler(checkoutSvc, getUserID)
+	}
+
 	// ── HTTP ──────────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
-	addRoutes(mux, authUsecase, kycHandler, orderService, walletUsecase, adminWalletUsecase, cryptoWalletUsecase, marketHub, tokenService)
+	addRoutes(mux, cfg, authUsecase, kycHandler, orderService, walletUsecase, adminWalletUsecase, cryptoWalletUsecase, marketHub, tokenService, checkoutHandler)
 
 	handler := middleware.CORS(cfg.App.AllowedOrigins)(middleware.RequestID(mux))
 

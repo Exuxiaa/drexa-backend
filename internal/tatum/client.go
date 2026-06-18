@@ -33,8 +33,8 @@ func NewClient(cfg config.TatumConfig) *Client {
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 type ErrorResponse struct {
-	ErrorCode string `json:"errorCode"`
-	Message   string `json:"message"`
+	ErrorCode  string `json:"errorCode"`
+	Message    string `json:"message"`
 	StatusCode int    `json:"statusCode"`
 }
 
@@ -213,7 +213,7 @@ func (c *Client) SubscribeAddressWebhook(ctx context.Context, chain, address str
 	}
 	req.Attr.Address = address
 	req.Attr.Chain = chain
-	req.Attr.URL = fmt.Sprintf("%s/api/v1/webhooks/tatum/deposit", c.cfg.WebhookURL)
+	req.Attr.URL = fmt.Sprintf("%s/api/v1/webhooks/tatum/deposit", c.cfg.BaseURL)
 
 	var res WebhookSubscriptionResponse
 	err := c.doRequest(ctx, http.MethodPost, "/subscription", req, &res)

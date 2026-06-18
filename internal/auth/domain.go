@@ -18,17 +18,18 @@ const (
 // ─── Entities ────────────────────────────────────────────────────────────────
 
 type User struct {
-	UserID         string    `gorm:"primaryKey;column:user_id"`
-	Email          string    `gorm:"column:email;uniqueIndex"`
-	Phone          string    `gorm:"column:phone;uniqueIndex"`
-	PasswordHash   string    `gorm:"column:password_hash"`
-	TradingPINHash string    `gorm:"column:trading_pin_hash;default:''"`
-	Role           UserRole  `gorm:"column:role;default:user"`
-	KycLevel       int       `gorm:"column:kyc_level;default:0"`
-	TwoFAEnabled   bool      `gorm:"column:two_fa_enabled;default:false"`
-	TwoFASecret    string    `gorm:"column:two_fa_secret;default:''"`
-	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
+	UserID           string    `gorm:"primaryKey;column:user_id"`
+	Email            string    `gorm:"column:email;uniqueIndex"`
+	Phone            string    `gorm:"column:phone;uniqueIndex"`
+	PasswordHash     string    `gorm:"column:password_hash"`
+	TradingPINHash   string    `gorm:"column:trading_pin_hash;default:''"`
+	Role             UserRole  `gorm:"column:role;default:user"`
+	KycLevel         int       `gorm:"column:kyc_level;default:0"`
+	TwoFAEnabled     bool      `gorm:"column:two_fa_enabled;default:false"`
+	TwoFASecret      string    `gorm:"column:two_fa_secret;default:''"`
+	StripeCustomerID string    `gorm:"column:stripe_customer_id;default:''"`
+	CreatedAt        time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt        time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
 
 // RefreshToken represents a persisted refresh token for session management.

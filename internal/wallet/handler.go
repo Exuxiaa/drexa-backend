@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"io"
 	"strings"
 
 	"drexa/internal/auth"
+
+	"github.com/stripe/stripe-go/v78"
+	"github.com/stripe/stripe-go/v78/webhook"
 )
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
@@ -259,17 +263,48 @@ func HandleCreateDepositIntent(uc WalletUsecase) http.HandlerFunc {
 }
 
 // HandleDepositWebhook is called by the payment provider on successful payment.
-// Secure this endpoint with provider signature verification in production.
-func HandleDepositWebhook(uc WalletUsecase) http.HandlerFunc {
+func HandleDepositWebhook(uc WalletUsecase, webhookSecret string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO: verify Stripe/Midtrans webhook signature here before processing
-		var req ConfirmDepositWebhookRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "invalid webhook payload"})
+		if webhookSecret == "" {
+			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "Webhook secret not configured"})
 			return
 		}
 
-		if err := uc.ConfirmDeposit(r.Context(), req.ProviderRef); err != nil {
+		const MaxBodyBytes = int64(65536)
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			sendJSON(w, http.StatusServiceUnavailable, MessageResponse{Error: "Error reading request body"})
+			return
+		}
+
+		event, err := webhook.ConstructEvent(payload, r.Header.Get("Stripe-Signature"), webhookSecret)
+		if err != nil {
+			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "Invalid signature"})
+			return
+		}
+
+		var providerRef string
+
+		if event.Type == "payment_intent.succeeded" {
+			var pi stripe.PaymentIntent
+			if err := json.Unmarshal(event.Data.Raw, &pi); err == nil {
+				providerRef = pi.ID
+			}
+		} else if event.Type == "checkout.session.completed" {
+			var session stripe.CheckoutSession
+			if err := json.Unmarshal(event.Data.Raw, &session); err == nil {
+				providerRef = session.ID
+			}
+		}
+
+		if providerRef == "" {
+			// Ignore other events
+			sendJSON(w, http.StatusOK, MessageResponse{Message: "event ignored"})
+			return
+		}
+
+		if err := uc.ConfirmDeposit(r.Context(), providerRef); err != nil {
 			switch err {
 			case ErrDepositNotFound:
 				sendJSON(w, http.StatusNotFound, MessageResponse{Error: err.Error()})

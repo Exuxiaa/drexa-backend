@@ -1,41 +1,54 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
 
 	"drexa/internal/wallet"
+	"drexa/pkg/config"
 )
 
 // TatumService talks to the Tatum v3 API for HD wallet generation, address
 // derivation, and on-chain balance lookups. The configured API key selects the
 // network (a testnet key returns testnet addresses/balances).
 type TatumService struct {
-	apiKey  string
-	baseURL string
-	http    *http.Client
+	cfg  config.TatumConfig
+	http *http.Client
 }
 
-func NewTatumService(apiKey, baseURL string) *TatumService {
+func NewTatumService(cfg config.TatumConfig, baseURL string) *TatumService {
 	return &TatumService{
-		apiKey:  apiKey,
-		baseURL: baseURL,
-		http:    &http.Client{Timeout: 15 * time.Second},
+		cfg:  cfg,
+		http: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
 var _ wallet.CryptoProvider = (*TatumService)(nil)
 
-func (s *TatumService) do(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL+path, nil)
+func (s *TatumService) doRequest(ctx context.Context, method, path string, body interface{}, out any) error {
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		reqBody = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, "https://api.tatum.io"+path, reqBody)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("x-api-key", s.apiKey)
+	req.Header.Set("x-api-key", s.cfg.APIKey)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	res, err := s.http.Do(req)
 	if err != nil {
@@ -60,7 +73,7 @@ func (s *TatumService) GenerateWallet(ctx context.Context, chain string) (string
 		Xpub     string `json:"xpub"`
 		Mnemonic string `json:"mnemonic"`
 	}
-	if err := s.do(ctx, fmt.Sprintf("/v3/%s/wallet", chain), &resp); err != nil {
+	if err := s.doRequest(ctx, http.MethodGet, fmt.Sprintf("/v3/%s/wallet", chain), nil, &resp); err != nil {
 		return "", err
 	}
 	// Note: mnemonic is intentionally discarded — these addresses are deposit-only.
@@ -73,7 +86,7 @@ func (s *TatumService) DeriveAddress(ctx context.Context, chain, xpub string, in
 	var resp struct {
 		Address string `json:"address"`
 	}
-	if err := s.do(ctx, fmt.Sprintf("/v3/%s/address/%s/%d", chain, xpub, index), &resp); err != nil {
+	if err := s.doRequest(ctx, http.MethodGet, fmt.Sprintf("/v3/%s/address/%s/%d", chain, xpub, index), nil, &resp); err != nil {
 		return "", err
 	}
 	return resp.Address, nil
@@ -88,7 +101,7 @@ func (s *TatumService) GetBalance(ctx context.Context, chain, address string) (s
 			Incoming string `json:"incoming"`
 			Outgoing string `json:"outgoing"`
 		}
-		if err := s.do(ctx, fmt.Sprintf("/v3/%s/address/balance/%s", chain, address), &resp); err != nil {
+		if err := s.doRequest(ctx, http.MethodGet, fmt.Sprintf("/v3/%s/address/balance/%s", chain, address), nil, &resp); err != nil {
 			return "", err
 		}
 		in, _ := strconv.ParseFloat(resp.Incoming, 64)
@@ -100,7 +113,7 @@ func (s *TatumService) GetBalance(ctx context.Context, chain, address string) (s
 		var resp struct {
 			Balance string `json:"balance"`
 		}
-		if err := s.do(ctx, fmt.Sprintf("/v3/%s/account/balance/%s", chain, address), &resp); err != nil {
+		if err := s.doRequest(ctx, http.MethodGet, fmt.Sprintf("/v3/%s/account/balance/%s", chain, address), nil, &resp); err != nil {
 			return "", err
 		}
 		if resp.Balance == "" {
@@ -113,9 +126,49 @@ func (s *TatumService) GetBalance(ctx context.Context, chain, address string) (s
 // SendTransaction is a stub for crypto withdrawals.
 // Real implementation requires securely managing the private key (e.g. via KMS) to sign transactions.
 func (s *TatumService) SendTransaction(ctx context.Context, chain string, amount string, toAddress string) (string, error) {
-	// In a real implementation we would:
-	// 1. Fetch encrypted private key from KMS
-	// 2. Sign the transaction locally or via Tatum KMS
-	// 3. POST /v3/chain/transaction
-	return "tx_hash_stub_" + time.Now().Format("20060102150405"), nil
+	if chain == "bitcoin" {
+		amtFloat, err := strconv.ParseFloat(amount, 64)
+		if err != nil {
+			return "", fmt.Errorf("invalid btc amount: %w", err)
+		}
+		
+		req := map[string]interface{}{
+			"fromAddress": []map[string]interface{}{
+				{
+					"address":    s.cfg.BTCAddress,
+					"privateKey": s.cfg.BTCPrivateKey,
+				},
+			},
+			"to": []map[string]interface{}{
+				{
+					"address": toAddress,
+					"value":   amtFloat,
+				},
+			},
+		}
+
+		var resp struct {
+			TxId string `json:"txId"`
+		}
+		if err := s.doRequest(ctx, http.MethodPost, "/v3/bitcoin/transaction", req, &resp); err != nil {
+			return "", err
+		}
+		return resp.TxId, nil
+
+	} else if chain == "ethereum" {
+		req := map[string]interface{}{
+			"to":             toAddress,
+			"amount":         amount,
+			"fromPrivateKey": s.cfg.ETHPrivateKey,
+		}
+		var resp struct {
+			TxId string `json:"txId"`
+		}
+		if err := s.doRequest(ctx, http.MethodPost, "/v3/ethereum/transaction", req, &resp); err != nil {
+			return "", err
+		}
+		return resp.TxId, nil
+	}
+
+	return "", fmt.Errorf("unsupported chain for sending transactions: %s", chain)
 }

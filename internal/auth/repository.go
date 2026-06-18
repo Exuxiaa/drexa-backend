@@ -15,6 +15,7 @@ type UserRepository interface {
 	UpdateTradingPINHash(ctx context.Context, userID, hash string) error
 	UpdateTwoFA(ctx context.Context, userID, secret string, enabled bool) error
 	UpdateKycLevel(ctx context.Context, userID, reviewedBy string, level int) error
+	UpdateStripeCustomerID(ctx context.Context, userID, stripeCustomerID string) error
 }
 
 // RefreshTokenRepository handles persistence for refresh token sessions.
