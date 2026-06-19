@@ -201,6 +201,12 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	orderService := order.NewService(orderRepository, pairService, matchingEngine,
 		func(ev order.TradeEvent) { tickerFeed.RecordTrade(ev.PairID, ev.Price) })
 
+	// Rehydrate dormant stop/OCO orders into the in-memory trigger book so they
+	// survive a restart.
+	if err := orderService.RestoreStops(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("order: restore dormant stop orders failed")
+	}
+
 	orderBookFeed := market.NewOrderBookFeed(
 		marketHub,
 		&depthSourceAdapter{orders: orderService},

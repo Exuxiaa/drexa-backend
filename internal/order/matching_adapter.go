@@ -43,6 +43,8 @@ func toEngineOrder(o *Order, priceDec int) *matching.Order {
 		eo.Side = matching.SideSell
 	}
 
+	// Market orders sweep the book; limit and (already-triggered) stop-limit
+	// orders both rest as a price-bounded limit order at o.Price.
 	if o.Type == TypeMarket {
 		eo.Type = matching.Market
 	} else {

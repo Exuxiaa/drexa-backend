@@ -20,8 +20,13 @@ const (
 type OrderType string
 
 const (
-	TypeMarket OrderType = "market"
-	TypeLimit  OrderType = "limit"
+	TypeMarket    OrderType = "market"
+	TypeLimit     OrderType = "limit"
+	TypeStopLimit OrderType = "stop-limit"
+	// TypeOCO is a request-only pseudo type. An OCO order is never stored as a
+	// single row: it expands into a 'limit' leg + a 'stop-limit' leg that share
+	// one oco_group_id, so that a fill/trigger of either leg cancels the other.
+	TypeOCO OrderType = "oco"
 )
 
 type OrderStatus string
@@ -32,38 +37,76 @@ const (
 	StatusPartiallyFilled OrderStatus = "partially_filled"
 	StatusFilled          OrderStatus = "filled"
 	StatusCancelled       OrderStatus = "cancelled"
+	// StatusUntriggered is the dormant state of a stop order whose stop price
+	// has not yet been reached. It rests off-book in the in-memory trigger book.
+	StatusUntriggered OrderStatus = "untriggered"
 )
+
+// OrderStatusFilter selects which lifecycle bucket ListOrders returns.
+type OrderStatusFilter string
+
+const (
+	FilterAll    OrderStatusFilter = "all"
+	FilterOpen   OrderStatusFilter = "open"   // active: pending/open/partially_filled/untriggered
+	FilterClosed OrderStatusFilter = "closed" // terminal: filled/cancelled
+)
+
+// OrderFilter narrows a user's order listing.
+type OrderFilter struct {
+	PairID string // optional; empty means all pairs
+	Status OrderStatusFilter
+	Limit  int // <= 0 means no limit
+}
 
 // ─── Entities ────────────────────────────────────────────────────────────────
 
 // Order is a user's intent to buy or sell a trading pair.
 type Order struct {
-	OrderID        string      `gorm:"primaryKey;column:order_id"`
-	UserID         string      `gorm:"column:user_id;index"`
-	PairID         string      `gorm:"column:pair_id;index"`
-	Side           OrderSide   `gorm:"column:side"`
-	Type           OrderType   `gorm:"column:type"`
-	Status         OrderStatus `gorm:"column:status;default:pending"`
-	Price          *float64    `gorm:"column:price;type:numeric(36,18)"` // nil for market orders
-	Quantity       float64     `gorm:"column:quantity;type:numeric(36,18)"`
-	FilledQuantity float64     `gorm:"column:filled_quantity;type:numeric(36,18);default:0"`
-	LockedAmount   float64     `gorm:"column:locked_amount;type:numeric(36,18);default:0"`
-	Fee            float64     `gorm:"column:fee;type:numeric(36,18);default:0"`
-	CreatedAt      time.Time   `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt      time.Time   `gorm:"column:updated_at;autoUpdateTime"`
+	OrderID        string      `gorm:"primaryKey;column:order_id" json:"order_id"`
+	UserID         string      `gorm:"column:user_id;index" json:"user_id"`
+	PairID         string      `gorm:"column:pair_id;index" json:"pair_id"`
+	Side           OrderSide   `gorm:"column:side" json:"side"`
+	Type           OrderType   `gorm:"column:type" json:"type"`
+	Status         OrderStatus `gorm:"column:status;default:pending" json:"status"`
+	Price          *float64    `gorm:"column:price;type:numeric(36,18)" json:"price,omitempty"` // nil for market orders
+	// StopPrice is the trigger price for stop-limit orders; nil otherwise.
+	StopPrice      *float64 `gorm:"column:stop_price;type:numeric(36,18)" json:"stop_price,omitempty"`
+	Quantity       float64  `gorm:"column:quantity;type:numeric(36,18)" json:"quantity"`
+	FilledQuantity float64  `gorm:"column:filled_quantity;type:numeric(36,18);default:0" json:"filled_quantity"`
+	LockedAmount   float64  `gorm:"column:locked_amount;type:numeric(36,18);default:0" json:"locked_amount"`
+	Fee            float64  `gorm:"column:fee;type:numeric(36,18);default:0" json:"fee"`
+	// OCOGroupID links the two legs of an OCO order; nil for standalone orders.
+	OCOGroupID *string   `gorm:"column:oco_group_id" json:"oco_group_id,omitempty"`
+	CreatedAt  time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
+	UpdatedAt  time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }
 
 // Trade is the immutable record produced when two orders match.
 type Trade struct {
-	TradeID      string    `gorm:"primaryKey;column:trade_id"`
-	PairID       string    `gorm:"column:pair_id;index"`
-	MakerOrderID string    `gorm:"column:maker_order_id"`
-	TakerOrderID string    `gorm:"column:taker_order_id"`
-	Price        float64   `gorm:"column:price;type:numeric(36,18)"`
-	Quantity     float64   `gorm:"column:quantity;type:numeric(36,18)"`
-	MakerFee     float64   `gorm:"column:maker_fee;type:numeric(36,18);default:0"`
-	TakerFee     float64   `gorm:"column:taker_fee;type:numeric(36,18);default:0"`
-	ExecutedAt   time.Time `gorm:"column:executed_at;autoCreateTime"`
+	TradeID      string    `gorm:"primaryKey;column:trade_id" json:"trade_id"`
+	PairID       string    `gorm:"column:pair_id;index" json:"pair_id"`
+	MakerOrderID string    `gorm:"column:maker_order_id" json:"maker_order_id"`
+	TakerOrderID string    `gorm:"column:taker_order_id" json:"taker_order_id"`
+	Price        float64   `gorm:"column:price;type:numeric(36,18)" json:"price"`
+	Quantity     float64   `gorm:"column:quantity;type:numeric(36,18)" json:"quantity"`
+	MakerFee     float64   `gorm:"column:maker_fee;type:numeric(36,18);default:0" json:"maker_fee"`
+	TakerFee     float64   `gorm:"column:taker_fee;type:numeric(36,18);default:0" json:"taker_fee"`
+	ExecutedAt   time.Time `gorm:"column:executed_at;autoCreateTime" json:"executed_at"`
+}
+
+// TradeView is a trade enriched with the requesting user's perspective: which
+// side they were on and whether they were the maker or taker. Returned by the
+// per-user trade-history endpoint.
+type TradeView struct {
+	TradeID    string    `json:"trade_id"`
+	PairID     string    `json:"pair_id"`
+	OrderID    string    `json:"order_id"`
+	Side       OrderSide `json:"side"`
+	Role       string    `json:"role"` // "maker" or "taker"
+	Price      float64   `json:"price"`
+	Quantity   float64   `json:"quantity"`
+	Fee        float64   `json:"fee"`
+	ExecutedAt time.Time `json:"executed_at"`
 }
 
 // ─── Service & Repository Interfaces ─────────────────────────────────────────
@@ -72,9 +115,16 @@ type Trade struct {
 type Service interface {
 	CreateOrder(ctx context.Context, userID string, req OrderRequest) (*Order, error)
 	CancelOrder(ctx context.Context, userID, orderID string) (*Order, error)
+	// ListOrders returns the caller's orders, newest first, narrowed by filter.
+	ListOrders(ctx context.Context, userID string, f OrderFilter) ([]Order, error)
+	// ListTrades returns the caller's executed fills, newest first.
+	ListTrades(ctx context.Context, userID string, limit int) ([]TradeView, error)
 	// OrderBookDepth returns the live aggregated book for a pair in real
 	// (float) prices, best prices first. maxLevels <= 0 returns every level.
 	OrderBookDepth(ctx context.Context, pairID string, maxLevels int) (*OrderBookSnapshot, error)
+	// RestoreStops rehydrates the in-memory stop-trigger book from any dormant
+	// (untriggered) orders persisted in the database. Call once on startup.
+	RestoreStops(ctx context.Context) error
 }
 
 // TradeEvent is emitted after a match prints one or more trades, carrying the
@@ -112,6 +162,16 @@ type Repository interface {
 	Create(ctx context.Context, o *Order) error
 	FindByID(ctx context.Context, orderID string) (*Order, error)
 	FindByUserID(ctx context.Context, userID string) ([]Order, error)
+	// FindOrders returns a user's orders, newest first, narrowed by filter.
+	FindOrders(ctx context.Context, userID string, f OrderFilter) ([]Order, error)
+	// FindUntriggered returns every dormant stop order across all users, for
+	// rehydrating the in-memory trigger book on startup.
+	FindUntriggered(ctx context.Context) ([]Order, error)
+	// FindByOCOGroup returns both legs of an OCO group.
+	FindByOCOGroup(ctx context.Context, groupID string) ([]Order, error)
+	// FindTradesByUserID returns the caller's fills (newest first), annotated
+	// with their side and maker/taker role. limit <= 0 means no limit.
+	FindTradesByUserID(ctx context.Context, userID string, limit int) ([]TradeView, error)
 	// Update persists mutable order fields (status, filled_quantity, fee).
 	Update(ctx context.Context, o *Order) error
 	// SaveTrades persists the fills produced by a match, atomically.
@@ -150,9 +210,10 @@ var (
 	ErrSelfTrade           = errors.New("self-trade prevention: buyer and seller are the same user")
 
 	ErrInvalidSide       = errors.New("side must be 'buy' or 'sell'")
-	ErrInvalidType       = errors.New("type must be 'market' or 'limit'")
+	ErrInvalidType       = errors.New("type must be 'market', 'limit', 'stop-limit' or 'oco'")
 	ErrPriceRequired     = errors.New("price is required and must be greater than zero for limit orders")
 	ErrPriceNotAllowed   = errors.New("price must not be set for market orders")
+	ErrStopPriceRequired = errors.New("stop_price is required and must be greater than zero for stop-limit/oco orders")
 	ErrBelowMinOrderSize = errors.New("quantity is below the minimum order size for this pair")
 	ErrPairNotFound      = errors.New("trading pair not found")
 	ErrPairSuspended     = errors.New("trading pair is suspended")

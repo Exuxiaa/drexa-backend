@@ -18,8 +18,12 @@ type OrderRequest struct {
 
 	Quantity float64 `json:"quantity"`
 
-	// LIMIT only
+	// Price is the limit price. Required for limit and stop-limit orders, and
+	// for the take-profit leg of an OCO order. Omitted for market orders.
 	Price *float64 `json:"price,omitempty"`
+
+	// StopPrice is the trigger price. Required for stop-limit and OCO orders.
+	StopPrice *float64 `json:"stop_price,omitempty"`
 }
 
 // MessageResponse is the standard JSON envelope for handler responses.
@@ -78,6 +82,7 @@ func HandleOrder(orderSvc Service) http.Handler {
 				errors.Is(err, ErrInvalidType),
 				errors.Is(err, ErrPriceRequired),
 				errors.Is(err, ErrPriceNotAllowed),
+				errors.Is(err, ErrStopPriceRequired),
 				errors.Is(err, ErrBelowMinOrderSize),
 				errors.Is(err, ErrPairSuspended):
 				sendJSON(w, http.StatusBadRequest, MessageResponse{Error: err.Error()})
@@ -161,5 +166,83 @@ func HandleCancelOrder(orderSvc Service) http.Handler {
 		}
 
 		sendJSON(w, http.StatusOK, o)
+	})
+}
+
+// HandleListOrders returns the caller's orders, newest first.
+// Route: GET /api/v1/orders?status=open|closed|all&pair_id=BTC_USDC&limit=100
+// Always responds with a JSON array (never null).
+func HandleListOrders(orderSvc Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(auth.UserClaimsKey).(*auth.JWTClaims)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		f := OrderFilter{
+			PairID: r.URL.Query().Get("pair_id"),
+			Status: FilterAll,
+			Limit:  200,
+		}
+		switch OrderStatusFilter(r.URL.Query().Get("status")) {
+		case FilterOpen:
+			f.Status = FilterOpen
+		case FilterClosed:
+			f.Status = FilterClosed
+		}
+		if q := r.URL.Query().Get("limit"); q != "" {
+			if n, err := strconv.Atoi(q); err == nil && n > 0 {
+				f.Limit = n
+			}
+		}
+		if f.Limit > 500 {
+			f.Limit = 500
+		}
+
+		orders, err := orderSvc.ListOrders(r.Context(), claims.UserID, f)
+		if err != nil {
+			log.Ctx(r.Context()).Error().Err(err).Msg("order: list failed")
+			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "internal server error"})
+			return
+		}
+		if orders == nil {
+			orders = []Order{}
+		}
+		sendJSON(w, http.StatusOK, orders)
+	})
+}
+
+// HandleListTrades returns the caller's executed fills, newest first.
+// Route: GET /api/v1/trades?limit=100
+// Always responds with a JSON array (never null).
+func HandleListTrades(orderSvc Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(auth.UserClaimsKey).(*auth.JWTClaims)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		limit := 100
+		if q := r.URL.Query().Get("limit"); q != "" {
+			if n, err := strconv.Atoi(q); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		if limit > 500 {
+			limit = 500
+		}
+
+		trades, err := orderSvc.ListTrades(r.Context(), claims.UserID, limit)
+		if err != nil {
+			log.Ctx(r.Context()).Error().Err(err).Msg("order: list trades failed")
+			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "internal server error"})
+			return
+		}
+		if trades == nil {
+			trades = []TradeView{}
+		}
+		sendJSON(w, http.StatusOK, trades)
 	})
 }

@@ -80,6 +80,8 @@ func addRoutes(
 
 	// ── Orders (JWT required) ─────────────────────────────────────────────────
 	mux.Handle("POST /api/v1/orders", jwt(order.HandleOrder(orderSvc)))
+	mux.Handle("GET /api/v1/orders", jwt(order.HandleListOrders(orderSvc)))
+	mux.Handle("GET /api/v1/trades", jwt(order.HandleListTrades(orderSvc)))
 	mux.Handle("DELETE /api/v1/orders/{orderID}", jwt(order.HandleCancelOrder(orderSvc)))
 
 	// ── Payments — Stripe PaymentIntent (embedded Elements flow) ──────────────
