@@ -11,6 +11,82 @@ import (
 	"drexa/internal/auth"
 )
 
+// HandleListOrders returns the authenticated user's orders with optional
+// status and pair_id filters.
+// Route: GET /api/v1/orders?status=open&pair_id=BTC_USDC&limit=50&offset=0
+func HandleListOrders(orderSvc Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(auth.UserClaimsKey).(*auth.JWTClaims)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		status := r.URL.Query().Get("status")
+		pairID := r.URL.Query().Get("pair_id")
+		limit, offset := parsePagination(r, 50, 200)
+
+		orders, total, err := orderSvc.ListOrders(r.Context(), claims.UserID, status, pairID, limit, offset)
+		if err != nil {
+			log.Ctx(r.Context()).Error().Err(err).Msg("order: list failed")
+			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "internal server error"})
+			return
+		}
+
+		sendJSON(w, http.StatusOK, map[string]any{
+			"orders": orders,
+			"total":  total,
+		})
+	})
+}
+
+// HandleListTrades returns the authenticated user's trade history with side
+// and role derived from their perspective.
+// Route: GET /api/v1/trades?pair_id=BTC_USDC&limit=50&offset=0
+func HandleListTrades(orderSvc Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(auth.UserClaimsKey).(*auth.JWTClaims)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		pairID := r.URL.Query().Get("pair_id")
+		limit, offset := parsePagination(r, 50, 200)
+
+		trades, total, err := orderSvc.ListTrades(r.Context(), claims.UserID, pairID, limit, offset)
+		if err != nil {
+			log.Ctx(r.Context()).Error().Err(err).Msg("order: list trades failed")
+			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "internal server error"})
+			return
+		}
+
+		sendJSON(w, http.StatusOK, map[string]any{
+			"trades": trades,
+			"total":  total,
+		})
+	})
+}
+
+// parsePagination extracts limit and offset from query params with defaults.
+func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int) {
+	limit = defaultLimit
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	if q := r.URL.Query().Get("offset"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	return
+}
+
 type OrderRequest struct {
 	PairID string    `json:"pair_id"`
 	Side   OrderSide `json:"side"`

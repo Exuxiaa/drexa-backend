@@ -184,16 +184,22 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	cryptoWalletUsecase  := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
 
 	// ── Market data (real-time WebSocket feed) ─────────────────────────────────
-	// The /market/ws feed now publishes our own order-book depth, sourced from
-	// the in-memory matching engine, instead of the external Binance stream.
+	// The /market/ws feed publishes both our internal order-book depth and
+	// 24h ticker stats proxied from Binance, so the frontend has no need for
+	// any direct external WebSocket connections.
 	marketHub := market.NewHub()
 	go marketHub.Run()
+
+	pairLister := &pairListerAdapter{db: db}
 	orderBookFeed := market.NewOrderBookFeed(
 		marketHub,
 		&depthSourceAdapter{orders: orderService},
-		&pairListerAdapter{db: db},
+		pairLister,
 	)
 	go orderBookFeed.Run(context.Background())
+
+	tickerFeed := market.NewTickerFeed(marketHub, pairLister)
+	go tickerFeed.Run(context.Background())
 
 	// ── P2P marketplace (on-chain smart-contract escrow) ───────────────────────
 	p2pRepository := p2pRepo.New(db)
