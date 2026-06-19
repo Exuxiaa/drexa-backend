@@ -78,7 +78,11 @@ func addRoutes(
 
 	// ── Orders (JWT required) ─────────────────────────────────────────────────
 	mux.Handle("POST /api/v1/orders", jwt(order.HandleOrder(orderSvc)))
+	mux.Handle("GET /api/v1/orders", jwt(order.HandleListOrders(orderSvc)))
 	mux.Handle("DELETE /api/v1/orders/{orderID}", jwt(order.HandleCancelOrder(orderSvc)))
+
+	// ── Trades (JWT required) ─────────────────────────────────────────────────
+	mux.Handle("GET /api/v1/trades", jwt(order.HandleListTrades(orderSvc)))
 
 	// ── Payments — Stripe PaymentIntent (embedded Elements flow) ──────────────
 	// The frontend's DepositPanel posts here to get a client_secret for Stripe.js.
@@ -112,10 +116,13 @@ func addRoutes(
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/approve", jwt(admin(wallet.HandleAdminApproveWithdrawal(adminWalletUc))))
 	mux.Handle("POST /api/v1/admin/wallet/withdrawals/{withdrawal_id}/reject", jwt(admin(wallet.HandleAdminRejectWithdrawal(adminWalletUc))))
 
-	// ── Market data (public real-time WebSocket feed: our own order book) ─────
+	// ── Market data (public) ──────────────────────────────────────────────────
+	// WebSocket: streams orderbook + ticker events.
 	mux.Handle("/api/v1/market/ws", market.HandleWebSocket(marketHub))
-	// Order book depth snapshot (public market data).
+	// Order book depth snapshot.
 	mux.Handle("GET /api/v1/market/orderbook/{pairID}", order.HandleOrderBook(orderSvc))
+	// OHLCV klines — proxied from Binance, no auth required.
+	mux.Handle("GET /api/v1/market/klines/{pairID}", market.HandleKlines())
 
 	// ── P2P marketplace (on-chain escrow) ─────────────────────────────────────
 	// Advertisements

@@ -66,6 +66,19 @@ type Trade struct {
 	ExecutedAt   time.Time `gorm:"column:executed_at;autoCreateTime"`
 }
 
+// UserTrade is a Trade enriched with the caller's perspective: which side they
+// were on and whether they were the maker or taker. Returned by ListTrades.
+type UserTrade struct {
+	TradeID    string    `json:"trade_id"`
+	PairID     string    `json:"pair_id"`
+	Side       OrderSide `json:"side"`
+	Price      float64   `json:"price"`
+	Quantity   float64   `json:"quantity"`
+	Fee        float64   `json:"fee"` // caller's fee (maker or taker)
+	Role       string    `json:"role"` // "maker" | "taker"
+	ExecutedAt time.Time `json:"executed_at"`
+}
+
 // ─── Service & Repository Interfaces ─────────────────────────────────────────
 
 // Service is the order domain's business-logic entrypoint.
@@ -75,6 +88,12 @@ type Service interface {
 	// OrderBookDepth returns the live aggregated book for a pair in real
 	// (float) prices, best prices first. maxLevels <= 0 returns every level.
 	OrderBookDepth(ctx context.Context, pairID string, maxLevels int) (*OrderBookSnapshot, error)
+	// ListOrders returns a filtered, paginated list of the user's orders.
+	// status and pairID are optional filters (empty string = no filter).
+	ListOrders(ctx context.Context, userID, status, pairID string, limit, offset int) ([]Order, int64, error)
+	// ListTrades returns the user's trade history with side/role derived from
+	// their perspective. pairID is an optional filter.
+	ListTrades(ctx context.Context, userID, pairID string, limit, offset int) ([]UserTrade, int64, error)
 }
 
 // OrderBookLevel is one aggregated price level: total resting quantity at a price.
@@ -98,6 +117,12 @@ type Repository interface {
 	Create(ctx context.Context, o *Order) error
 	FindByID(ctx context.Context, orderID string) (*Order, error)
 	FindByUserID(ctx context.Context, userID string) ([]Order, error)
+	// FindByUserIDFiltered returns paginated orders for a user with optional
+	// status and pairID filters. Empty string = no filter.
+	FindByUserIDFiltered(ctx context.Context, userID, status, pairID string, limit, offset int) ([]Order, int64, error)
+	// FindTradesByUserID returns paginated trades for a user enriched with
+	// their side and role. pairID is an optional filter.
+	FindTradesByUserID(ctx context.Context, userID, pairID string, limit, offset int) ([]UserTrade, int64, error)
 	// Update persists mutable order fields (status, filled_quantity, fee).
 	Update(ctx context.Context, o *Order) error
 	// SaveTrades persists the fills produced by a match, atomically.

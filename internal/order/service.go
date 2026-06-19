@@ -189,6 +189,14 @@ func toBookLevels(levels []matching.DepthLevel, priceDec int) []OrderBookLevel {
 	return out
 }
 
+func (s *service) ListOrders(ctx context.Context, userID, status, pairID string, limit, offset int) ([]Order, int64, error) {
+	return s.repo.FindByUserIDFiltered(ctx, userID, status, pairID, limit, offset)
+}
+
+func (s *service) ListTrades(ctx context.Context, userID, pairID string, limit, offset int) ([]UserTrade, int64, error) {
+	return s.repo.FindTradesByUserID(ctx, userID, pairID, limit, offset)
+}
+
 // CancelOrder removes a still-open order from the book and marks it cancelled.
 func (s *service) CancelOrder(ctx context.Context, userID, orderID string) (*Order, error) {
 	o, err := s.repo.FindByID(ctx, orderID)
