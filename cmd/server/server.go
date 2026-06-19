@@ -85,7 +85,9 @@ func toMarketLevels(levels []order.OrderBookLevel) []market.BookLevel {
 // orderWalletAdapter bridges wallet.WalletRepository to order.WalletService
 // so the order domain can check available balance without importing internal/wallet.
 type orderWalletAdapter struct {
-	repo wallet.WalletRepository
+	repo   wallet.WalletRepository
+	txRepo wallet.TransactionRepository
+	tx     wallet.TxManager
 }
 
 func (a *orderWalletAdapter) AvailableBalance(ctx context.Context, userID, currency string) (int64, error) {
@@ -94,6 +96,137 @@ func (a *orderWalletAdapter) AvailableBalance(ctx context.Context, userID, curre
 		return 0, nil // no wallet = zero balance
 	}
 	return w.Available(), nil
+}
+
+func (a *orderWalletAdapter) LockBalance(ctx context.Context, userID, currency string, amount int64) error {
+	return a.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := a.repo.FindByUserAndCurrency(ctx, userID, wallet.CurrencyCode(currency))
+		if err != nil {
+			return err
+		}
+		wLock, err := a.repo.FindByIDForUpdate(ctx, w.WalletID)
+		if err != nil {
+			return err
+		}
+		if wLock.Available() < amount {
+			return wallet.ErrInsufficientBalance
+		}
+		return a.repo.UpdateLocked(ctx, wLock.WalletID, wLock.Locked+amount)
+	})
+}
+
+func (a *orderWalletAdapter) UnlockBalance(ctx context.Context, userID, currency string, amount int64) error {
+	return a.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := a.repo.FindByUserAndCurrency(ctx, userID, wallet.CurrencyCode(currency))
+		if err != nil {
+			return nil // no wallet to unlock
+		}
+		wLock, err := a.repo.FindByIDForUpdate(ctx, w.WalletID)
+		if err != nil {
+			return err
+		}
+		newLocked := wLock.Locked - amount
+		if newLocked < 0 {
+			newLocked = 0
+		}
+		return a.repo.UpdateLocked(ctx, wLock.WalletID, newLocked)
+	})
+}
+
+func (a *orderWalletAdapter) SettleTrade(ctx context.Context, tradeID string,
+	makerID, makerSpentCurrency string, makerSpentAmount int64, makerReceivedCurrency string, makerReceivedAmount int64,
+	takerID, takerSpentCurrency string, takerSpentAmount int64, takerReceivedCurrency string, takerReceivedAmount int64, takerUnlock bool) error {
+
+	return a.tx.Do(ctx, func(ctx context.Context) error {
+		// Helper to debit (with optional unlock) and credit
+		processUser := func(uID, spentCur string, spentAmt int64, recCur string, recAmt int64, unlock bool) error {
+			// Spend
+			wSpend, err := a.repo.FindByUserAndCurrency(ctx, uID, wallet.CurrencyCode(spentCur))
+			if err != nil {
+				return err
+			}
+			wSpendLock, err := a.repo.FindByIDForUpdate(ctx, wSpend.WalletID)
+			if err != nil {
+				return err
+			}
+			newBalance := wSpendLock.Balance - spentAmt
+			newLocked := wSpendLock.Locked
+			if unlock {
+				newLocked -= spentAmt
+				if newLocked < 0 {
+					newLocked = 0
+				}
+			} else {
+				// if not unlocking (e.g. market order), we must ensure available >= spentAmt
+				if wSpendLock.Available() < spentAmt {
+					return wallet.ErrInsufficientBalance
+				}
+			}
+			if err := a.repo.UpdateBalance(ctx, wSpendLock.WalletID, newBalance); err != nil {
+				return err
+			}
+			if err := a.repo.UpdateLocked(ctx, wSpendLock.WalletID, newLocked); err != nil {
+				return err
+			}
+			// Record spend tx
+			if err := a.txRepo.Create(ctx, &wallet.Transaction{
+				TxID:          tradeID + "-" + uID + "-spend",
+				WalletID:      wSpendLock.WalletID,
+				UserID:        uID,
+				Type:          wallet.TxTypeTrade,
+				Status:        wallet.TxStatusCompleted,
+				Amount:        spentAmt,
+				BalanceBefore: wSpendLock.Balance,
+				BalanceAfter:  newBalance,
+				Currency:      wallet.CurrencyCode(spentCur),
+				RefID:         tradeID,
+				Description:   "Trade execution spend",
+			}); err != nil {
+				return err
+			}
+
+			// Receive
+			wRec, err := a.repo.FindByUserAndCurrency(ctx, uID, wallet.CurrencyCode(recCur))
+			if err != nil {
+				return err
+			}
+			wRecLock, err := a.repo.FindByIDForUpdate(ctx, wRec.WalletID)
+			if err != nil {
+				return err
+			}
+			newRecBalance := wRecLock.Balance + recAmt
+			if err := a.repo.UpdateBalance(ctx, wRecLock.WalletID, newRecBalance); err != nil {
+				return err
+			}
+			// Record receive tx
+			if err := a.txRepo.Create(ctx, &wallet.Transaction{
+				TxID:          tradeID + "-" + uID + "-recv",
+				WalletID:      wRecLock.WalletID,
+				UserID:        uID,
+				Type:          wallet.TxTypeTrade,
+				Status:        wallet.TxStatusCompleted,
+				Amount:        recAmt,
+				BalanceBefore: wRecLock.Balance,
+				BalanceAfter:  newRecBalance,
+				Currency:      wallet.CurrencyCode(recCur),
+				RefID:         tradeID,
+				Description:   "Trade execution receive",
+			}); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		// Maker is always a resting limit order -> unlock = true
+		if err := processUser(makerID, makerSpentCurrency, makerSpentAmount, makerReceivedCurrency, makerReceivedAmount, true); err != nil {
+			return err
+		}
+		// Taker could be market or limit -> use takerUnlock param
+		if err := processUser(takerID, takerSpentCurrency, takerSpentAmount, takerReceivedCurrency, takerReceivedAmount, takerUnlock); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // pairListerAdapter lists active trading pairs from the market.TradingPair
@@ -193,12 +326,16 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 	cryptoProvider       := walletSvc.NewTatumService(cfg.Tatum, "https://api.tatum.io")
 	txManager            := walletRepo.NewTxManager(db)
 
-	walletUsecase        := walletUc.NewWalletUsecase(walletRepository, txRepository, depositRepository, withdrawalRepository, paymentService, disbursementService, cryptoProvider, txManager)
+	walletUsecase        := walletUc.NewWalletUsecase(walletRepository, txRepository, depositRepository, withdrawalRepository, cryptoAddressRepo, paymentService, disbursementService, cryptoProvider, txManager)
 	adminWalletUsecase   := walletUc.NewAdminWalletUsecase(walletRepository, txRepository, withdrawalRepository, disbursementService, txManager)
 	cryptoWalletUsecase  := walletUc.NewCryptoWalletUsecase(cryptoAddressRepo, walletRepository, txRepository, txManager, cryptoProvider, false)
 
 	// orderService wired here (after wallet repos) so it can inject balance checks.
-	orderService := order.NewService(orderRepository, pairService, matchingEngine, &orderWalletAdapter{repo: walletRepository})
+	orderService := order.NewService(orderRepository, pairService, matchingEngine, &orderWalletAdapter{
+		repo:   walletRepository,
+		txRepo: txRepository,
+		tx:     txManager,
+	})
 
 	// ── Market data (real-time WebSocket feed) ─────────────────────────────────
 	// The /market/ws feed publishes both our internal order-book depth and

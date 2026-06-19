@@ -40,6 +40,7 @@ const (
 	TxTypeTransfer   TransactionType = "transfer"
 	TxTypeFee        TransactionType = "fee"
 	TxTypeReversal   TransactionType = "reversal"
+	TxTypeTrade      TransactionType = "trade"
 )
 
 // TransactionStatus tracks the lifecycle of a transaction

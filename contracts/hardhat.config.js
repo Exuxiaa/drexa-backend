@@ -1,4 +1,5 @@
 require("hardhat/config");
+require("@nomicfoundation/hardhat-toolbox");
 
 // Optional: a public testnet (Sepolia) deploy target. Reads from env so no
 // secrets live in the repo. Leave SEPOLIA_RPC_URL / DEPLOYER_PRIVATE_KEY unset

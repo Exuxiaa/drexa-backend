@@ -22,11 +22,29 @@ services:
       context: .
       target: final
     env_file: .env
+    environment:
+      ESCROW_RPC_URL: http://hardhat:8545
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+      hardhat:
+        condition: service_healthy
+    restart: unless-stopped
+
+  hardhat:
+    build:
+      context: ./contracts
+      dockerfile: Dockerfile
+    ports:
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8545"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     restart: unless-stopped
     
   # Reverse proxy — only started when "ngrok" is in COMPOSE_PROFILES (see .env).
@@ -35,7 +53,7 @@ services:
     image: ngrok/ngrok:latest
     profiles: ["ngrok"]
     restart: unless-stopped
-    command: http server:8080
+    command: http server:8080 --domain=penalize-identify-sneezing.ngrok-free.dev --pooling-enabled
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
     depends_on:

@@ -13,14 +13,15 @@ import (
 )
 
 type walletUsecase struct {
-	walletRepo     wallet.WalletRepository
-	txRepo         wallet.TransactionRepository
-	depositRepo    wallet.DepositRepository
-	withdrawalRepo wallet.WithdrawalRepository
-	paymentSvc     wallet.PaymentService
-	disburseSvc    wallet.DisbursementService
-	cryptoProvider wallet.CryptoProvider
-	tx             wallet.TxManager
+	walletRepo        wallet.WalletRepository
+	txRepo            wallet.TransactionRepository
+	depositRepo       wallet.DepositRepository
+	withdrawalRepo    wallet.WithdrawalRepository
+	cryptoAddressRepo wallet.CryptoAddressRepository
+	paymentSvc        wallet.PaymentService
+	disburseSvc       wallet.DisbursementService
+	cryptoProvider    wallet.CryptoProvider
+	tx                wallet.TxManager
 }
 
 func NewWalletUsecase(
@@ -28,20 +29,22 @@ func NewWalletUsecase(
 	txRepo wallet.TransactionRepository,
 	depositRepo wallet.DepositRepository,
 	withdrawalRepo wallet.WithdrawalRepository,
+	cryptoAddressRepo wallet.CryptoAddressRepository,
 	paymentSvc wallet.PaymentService,
 	disburseSvc wallet.DisbursementService,
 	cryptoProvider wallet.CryptoProvider,
 	tx wallet.TxManager,
 ) wallet.WalletUsecase {
 	return &walletUsecase{
-		walletRepo:     walletRepo,
-		txRepo:         txRepo,
-		depositRepo:    depositRepo,
-		withdrawalRepo: withdrawalRepo,
-		paymentSvc:     paymentSvc,
-		disburseSvc:    disburseSvc,
-		cryptoProvider: cryptoProvider,
-		tx:             tx,
+		walletRepo:        walletRepo,
+		txRepo:            txRepo,
+		depositRepo:       depositRepo,
+		withdrawalRepo:    withdrawalRepo,
+		cryptoAddressRepo: cryptoAddressRepo,
+		paymentSvc:        paymentSvc,
+		disburseSvc:       disburseSvc,
+		cryptoProvider:    cryptoProvider,
+		tx:                tx,
 	}
 }
 
@@ -496,11 +499,27 @@ func (uc *walletUsecase) InitiateCryptoWithdrawal(ctx context.Context, userID st
 		return nil, wallet.ErrInvalidAmount
 	}
 
+	// Check if this is an internal transfer
+	cryptoAddr, err := uc.cryptoAddressRepo.FindByAddress(ctx, req.ToAddress)
+	if err == nil && cryptoAddr != nil {
+		if cryptoAddr.Currency != req.Currency {
+			return nil, errors.New("currency mismatch for internal transfer")
+		}
+		
+		internalReq := &wallet.InternalTransferRequest{
+			FromUserID: userID,
+			ToUserID:   cryptoAddr.UserID,
+			Currency:   req.Currency,
+			Amount:     req.Amount,
+		}
+		return uc.Transfer(ctx, internalReq)
+	}
+
 	var txDebit *wallet.Transaction
 	var withdrawalID string
 
 	// Step 1: Lock balance and record pending transaction locally
-	err := uc.tx.Do(ctx, func(ctx context.Context) error {
+	err = uc.tx.Do(ctx, func(ctx context.Context) error {
 		w, err := uc.walletRepo.FindByUserAndCurrency(ctx, userID, req.Currency)
 		if err != nil { return err }
 

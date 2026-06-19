@@ -157,10 +157,15 @@ type PairService interface {
 }
 
 // WalletService is the narrow interface the order domain needs from the wallet
-// domain to validate available balance before persisting an order.
-// Returns 0, nil when no wallet exists (treated as zero balance).
+// domain to validate available balance before persisting an order, lock funds,
+// and settle trades.
 type WalletService interface {
 	AvailableBalance(ctx context.Context, userID, currency string) (int64, error)
+	LockBalance(ctx context.Context, userID, currency string, amount int64) error
+	UnlockBalance(ctx context.Context, userID, currency string, amount int64) error
+	SettleTrade(ctx context.Context, tradeID string,
+		makerID, makerSpentCurrency string, makerSpentAmount int64, makerReceivedCurrency string, makerReceivedAmount int64,
+		takerID, takerSpentCurrency string, takerSpentAmount int64, takerReceivedCurrency string, takerReceivedAmount int64, takerUnlock bool) error
 }
 
 // ─── Domain Errors ───────────────────────────────────────────────────────────
