@@ -37,33 +37,38 @@ const (
 // ─── Entities ────────────────────────────────────────────────────────────────
 
 // Order is a user's intent to buy or sell a trading pair.
+//
+// json tags are required: this struct is returned directly by POST /orders,
+// DELETE /orders/{id} and (in a list) GET /orders. Without them Go marshals the
+// Go field names (PascalCase) and the frontend — which reads snake_case, matching
+// the rest of the API — sees every field as undefined.
 type Order struct {
-	OrderID        string      `gorm:"primaryKey;column:order_id"`
-	UserID         string      `gorm:"column:user_id;index"`
-	PairID         string      `gorm:"column:pair_id;index"`
-	Side           OrderSide   `gorm:"column:side"`
-	Type           OrderType   `gorm:"column:type"`
-	Status         OrderStatus `gorm:"column:status;default:pending"`
-	Price          *float64    `gorm:"column:price;type:numeric(36,18)"` // nil for market orders
-	Quantity       float64     `gorm:"column:quantity;type:numeric(36,18)"`
-	FilledQuantity float64     `gorm:"column:filled_quantity;type:numeric(36,18);default:0"`
-	LockedAmount   float64     `gorm:"column:locked_amount;type:numeric(36,18);default:0"`
-	Fee            float64     `gorm:"column:fee;type:numeric(36,18);default:0"`
-	CreatedAt      time.Time   `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt      time.Time   `gorm:"column:updated_at;autoUpdateTime"`
+	OrderID        string      `gorm:"primaryKey;column:order_id" json:"order_id"`
+	UserID         string      `gorm:"column:user_id;index" json:"user_id"`
+	PairID         string      `gorm:"column:pair_id;index" json:"pair_id"`
+	Side           OrderSide   `gorm:"column:side" json:"side"`
+	Type           OrderType   `gorm:"column:type" json:"type"`
+	Status         OrderStatus `gorm:"column:status;default:pending" json:"status"`
+	Price          *float64    `gorm:"column:price;type:numeric(36,18)" json:"price"` // nil for market orders
+	Quantity       float64     `gorm:"column:quantity;type:numeric(36,18)" json:"quantity"`
+	FilledQuantity float64     `gorm:"column:filled_quantity;type:numeric(36,18);default:0" json:"filled_quantity"`
+	LockedAmount   float64     `gorm:"column:locked_amount;type:numeric(36,18);default:0" json:"locked_amount"`
+	Fee            float64     `gorm:"column:fee;type:numeric(36,18);default:0" json:"fee"`
+	CreatedAt      time.Time   `gorm:"column:created_at;autoCreateTime" json:"created_at"`
+	UpdatedAt      time.Time   `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }
 
 // Trade is the immutable record produced when two orders match.
 type Trade struct {
-	TradeID      string    `gorm:"primaryKey;column:trade_id"`
-	PairID       string    `gorm:"column:pair_id;index"`
-	MakerOrderID string    `gorm:"column:maker_order_id"`
-	TakerOrderID string    `gorm:"column:taker_order_id"`
-	Price        float64   `gorm:"column:price;type:numeric(36,18)"`
-	Quantity     float64   `gorm:"column:quantity;type:numeric(36,18)"`
-	MakerFee     float64   `gorm:"column:maker_fee;type:numeric(36,18);default:0"`
-	TakerFee     float64   `gorm:"column:taker_fee;type:numeric(36,18);default:0"`
-	ExecutedAt   time.Time `gorm:"column:executed_at;autoCreateTime"`
+	TradeID      string    `gorm:"primaryKey;column:trade_id" json:"trade_id"`
+	PairID       string    `gorm:"column:pair_id;index" json:"pair_id"`
+	MakerOrderID string    `gorm:"column:maker_order_id" json:"maker_order_id"`
+	TakerOrderID string    `gorm:"column:taker_order_id" json:"taker_order_id"`
+	Price        float64   `gorm:"column:price;type:numeric(36,18)" json:"price"`
+	Quantity     float64   `gorm:"column:quantity;type:numeric(36,18)" json:"quantity"`
+	MakerFee     float64   `gorm:"column:maker_fee;type:numeric(36,18);default:0" json:"maker_fee"`
+	TakerFee     float64   `gorm:"column:taker_fee;type:numeric(36,18);default:0" json:"taker_fee"`
+	ExecutedAt   time.Time `gorm:"column:executed_at;autoCreateTime" json:"executed_at"`
 }
 
 // UserTrade is a Trade enriched with the caller's perspective: which side they
@@ -183,5 +188,6 @@ var (
 	ErrBelowMinOrderSize   = errors.New("quantity is below the minimum order size for this pair")
 	ErrPairNotFound        = errors.New("trading pair not found")
 	ErrPairSuspended       = errors.New("trading pair is suspended")
+	ErrFiatNotTradable     = errors.New("fiat currency is not tradable; deposit or withdraw USD via the wallet instead")
 	ErrInsufficientBalance = errors.New("insufficient balance to place this order")
 )

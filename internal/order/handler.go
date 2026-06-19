@@ -157,6 +157,7 @@ func HandleOrder(orderSvc Service) http.Handler {
 				errors.Is(err, ErrPriceRequired),
 				errors.Is(err, ErrPriceNotAllowed),
 				errors.Is(err, ErrBelowMinOrderSize),
+				errors.Is(err, ErrFiatNotTradable),
 				errors.Is(err, ErrPairSuspended):
 				sendJSON(w, http.StatusBadRequest, MessageResponse{Error: err.Error()})
 			default:

@@ -23,6 +23,13 @@ func NewService(repo Repository, pairs PairService, matcher Matcher, walletSvc W
 	return &service{repo: repo, pairs: pairs, matcher: matcher, walletSvc: walletSvc}
 }
 
+// isFiatRail reports whether a coin is a fiat on/off-ramp currency that may be
+// deposited and withdrawn but never traded on the order book. Balances are held
+// in USDT, so USD only exists at the Stripe (pay-in) / PayPal (pay-out) edges.
+func isFiatRail(coin string) bool {
+	return coin == "USD"
+}
+
 // smallestUnitFactor returns how many of the currency's base units equal one
 // whole unit. Used to convert float order amounts into the int64 stored by wallets.
 func smallestUnitFactor(currency string) int64 {
@@ -70,6 +77,13 @@ func (s *service) CreateOrder(ctx context.Context, userID string, req OrderReque
 	}
 	if !pair.Active {
 		return nil, ErrPairSuspended
+	}
+	// USD is a fiat on/off-ramp only. Balances and the order book are denominated
+	// in USDT, so a user can never trade USDT (or anything) for USD — that conversion
+	// happens implicitly at deposit (Stripe) and withdrawal (PayPal). Reject any
+	// order whose pair has a fiat leg outright.
+	if isFiatRail(pair.BaseCoin) || isFiatRail(pair.QuoteCoin) {
+		return nil, ErrFiatNotTradable
 	}
 	if req.Quantity < pair.MinOrderSize {
 		return nil, ErrBelowMinOrderSize

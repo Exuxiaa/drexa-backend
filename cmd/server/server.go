@@ -23,6 +23,7 @@ import (
 	kycSvc "drexa/internal/kyc/service"
 	kycUc "drexa/internal/kyc/usecase"
 	"drexa/internal/market"
+	"drexa/internal/marketmaker"
 	"drexa/internal/matching"
 	"drexa/internal/order"
 	orderRepo "drexa/internal/order/repository"
@@ -369,6 +370,60 @@ func (a *p2pWalletAdapter) CreditBalance(ctx context.Context, userID, currency s
 	})
 }
 
+// houseUserID is the fixed user_id of the system liquidity account the market
+// maker quotes from. Created by ensureHouseUser on startup.
+const houseUserID = "00000000-0000-0000-0000-000000000001"
+
+// ensureHouseUser inserts the market-maker's system account if it does not exist.
+// password_hash is set to a value that never matches a bcrypt check, so the
+// account cannot be logged into.
+func ensureHouseUser(db *gorm.DB) error {
+	return db.Exec(
+		`INSERT INTO users (user_id, email, phone, password_hash, role, kyc_level)
+		 VALUES (?, 'house@drexa.internal', 'house-liquidity', '!', 'admin', 3)
+		 ON CONFLICT (user_id) DO NOTHING`,
+		houseUserID,
+	).Error
+}
+
+// houseTreasury keeps the market maker's inventory topped up. It implements
+// marketmaker.Treasury by directly setting the house wallet balance — the house
+// is a synthetic, effectively-infinite counterparty for the demo, so its balance
+// is not backed by real deposits.
+type houseTreasury struct {
+	repo   wallet.WalletRepository
+	tx     wallet.TxManager
+	userID string
+}
+
+func (h *houseTreasury) EnsureBalance(ctx context.Context, currency string, target int64) error {
+	return h.tx.Do(ctx, func(ctx context.Context) error {
+		w, err := h.repo.FindByUserAndCurrency(ctx, h.userID, wallet.CurrencyCode(currency))
+		if err != nil {
+			if err != wallet.ErrWalletNotFound {
+				return err
+			}
+			w = &wallet.Wallet{
+				WalletID: uuid.NewString(),
+				UserID:   h.userID,
+				Currency: wallet.CurrencyCode(currency),
+				Status:   wallet.WalletStatusActive,
+			}
+			if createErr := h.repo.Create(ctx, w); createErr != nil {
+				return createErr
+			}
+		}
+		wLock, err := h.repo.FindByIDForUpdate(ctx, w.WalletID)
+		if err != nil {
+			return err
+		}
+		if wLock.Balance >= target {
+			return nil
+		}
+		return h.repo.UpdateBalance(ctx, wLock.WalletID, target)
+	})
+}
+
 type Server struct {
 	httpServer *http.Server
 }
@@ -467,6 +522,21 @@ func NewServer(cfg *config.Config, db *gorm.DB) *Server {
 
 	tickerFeed := market.NewTickerFeed(marketHub, pairLister)
 	go tickerFeed.Run(context.Background())
+
+	// ── House market maker ─────────────────────────────────────────────────────
+	// Seeds resting liquidity on every *_USDT pair so user orders always have a
+	// counterparty. Without it the internal book is empty and orders never fill.
+	if err := ensureHouseUser(db); err != nil {
+		log.Error().Err(err).Msg("failed to ensure house liquidity account")
+	} else {
+		mmBot := marketmaker.New(
+			orderService,
+			pairLister,
+			&houseTreasury{repo: walletRepository, tx: txManager, userID: houseUserID},
+			houseUserID,
+		)
+		go mmBot.Run(context.Background())
+	}
 
 
 	// ── P2P marketplace (on-chain smart-contract escrow) ───────────────────────
